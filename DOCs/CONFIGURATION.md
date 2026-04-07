@@ -24,6 +24,10 @@ To ensure the orchestration engine parses your environment flawlessly and safely
     ],
     "reverse_relations": [
       "wuauserv"
+    ],
+    "firewall_groups": [
+      "File and Printer Sharing",
+      "Core Networking"
     ]
   }
 }
@@ -58,3 +62,11 @@ The `protected_processes` array acts as a safety net to prevent data loss. If th
 When listing background services, you must use the internal **Service Name**, not the "Display Name" shown in the Windows GUI. 
 * To find the true name, open `services.msc`, right-click a service -> Properties, and look at the "Service name:" field at the top.
 * *Correct:* `"wuauserv"` | *Incorrect:* `"Windows Update"`
+
+### 6. Firewall Groups
+The `firewall_groups` array controls Windows Firewall rule groups by exact Display Group name. During Start, the engine enables each group; during Stop, it disables each group.
+* Use exact Display Group strings as shown in Windows Defender Firewall with Advanced Security.
+* Commands used by the engine:
+  * `Enable-NetFirewallRule -DisplayGroup "Name"`
+  * `Disable-NetFirewallRule -DisplayGroup "Name"`
+* *Example:* `"firewall_groups": ["File and Printer Sharing", "Core Networking"]`

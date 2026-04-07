@@ -126,8 +126,8 @@ if ($Action -eq "Start") {
             }
 
             $serviceName = [string]$serviceItem
-            gsudo sc config $serviceName start= demand
-            gsudo net start $serviceName
+            gsudo sc.exe config $serviceName start= demand
+            gsudo net.exe start $serviceName
 
             $pollStart = Get-Date
             while ($true) {
@@ -213,16 +213,16 @@ if ($Action -eq "Stop") {
             }
 
             $serviceName = [string]$serviceItem
-            gsudo net stop $serviceName /y 2>&1 | Out-Null
-            gsudo sc config $serviceName start= disabled 2>&1 | Out-Null
+            gsudo net.exe stop $serviceName /y 2>&1 | Out-Null
+            gsudo sc.exe config $serviceName start= disabled 2>&1 | Out-Null
         }
     }
 
     $reverseRelationsProperty = $workspace.PSObject.Properties["reverse_relations"]
     if ($null -ne $reverseRelationsProperty) {
         foreach ($revServiceName in @($reverseRelationsProperty.Value)) {
-            gsudo sc config $revServiceName start= demand 2>&1 | Out-Null
-            gsudo net start $revServiceName 2>&1 | Out-Null
+            gsudo sc.exe config $revServiceName start= demand 2>&1 | Out-Null
+            gsudo net.exe start $revServiceName 2>&1 | Out-Null
         }
     }
 

@@ -11,11 +11,51 @@
       "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe' --profile Live"
     ],
     "protected_processes": [
-      "Cubase12.exe",
+      "Cubase12",
       "WINWORD"
     ],
     "reverse_relations": [
       "wuauserv"
+    ]
+  },
+  "Office": {
+    "services": [
+      "ClickToRunSvc"
+    ],
+    "executables": [
+      "'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"
+    ],
+    "protected_processes": [
+      "WINWORD",
+      "EXCEL",
+      "POWERPNT",
+      "ONENOTE",
+      "OUTLOOK",
+      "MSACCESS",
+      "MSPUB",
+      "OneDrive",
+      "lync",
+      "msteams"
+    ]
+  },
+  "SMB": {
+    "services": [
+      "LanmanServer",
+      "LanmanWorkstation"
+    ],
+    "firewall_groups": [
+      "File and Printer Sharing"
+    ]
+  },
+  "StarDesk": {
+    "services": [
+      "StarDeskService"
+    ],
+    "executables": [
+      "'C:/Program Files/StarDesk/StarDesk.exe'"
+    ],
+    "protected_processes": [
+      "StarDesk"
     ]
   }
 }

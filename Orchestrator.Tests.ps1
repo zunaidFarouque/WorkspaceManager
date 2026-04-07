@@ -459,12 +459,12 @@ Describe "Phase 4 - The Stop Pipeline" {
 
         { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null } | Should -Not -Throw
 
-        $reverseCalls = @($global:gsudoCalls | Where-Object { $_ -like "sc config Svc* start= demand" -or $_ -like "net start Svc*" })
+        $reverseCalls = @($global:gsudoCalls | Where-Object { $_ -like "sc.exe config Svc* start= demand" -or $_ -like "net.exe start Svc*" })
         $reverseCalls.Count | Should -Be 4
-        $reverseCalls[0] | Should -Be "sc config SvcOne start= demand"
-        $reverseCalls[1] | Should -Be "net start SvcOne"
-        $reverseCalls[2] | Should -Be "sc config SvcTwo start= demand"
-        $reverseCalls[3] | Should -Be "net start SvcTwo"
+        $reverseCalls[0] | Should -Be "sc.exe config SvcOne start= demand"
+        $reverseCalls[1] | Should -Be "net.exe start SvcOne"
+        $reverseCalls[2] | Should -Be "sc.exe config SvcTwo start= demand"
+        $reverseCalls[3] | Should -Be "net.exe start SvcTwo"
         Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
     }
 

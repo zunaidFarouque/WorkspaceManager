@@ -1,0 +1,17 @@
+{
+    "StarDesk": {
+      "services": ["StarDeskService"],
+      "processes": ["StarDesk.exe"],
+      "executable": "C:\\Program Files\\StarDesk\\StarDesk.exe"
+    },
+    "Office": {
+      "services": ["ClickToRunSvc", "osppsvc"],
+      "processes": ["WINWORD.EXE", "EXCEL.EXE"],
+      "executable": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE"
+    },
+    "SMB_Share": {
+      "services": ["LanmanServer", "LanmanWorkstation"],
+      "processes": [],
+      "executable": ""
+    }
+  }

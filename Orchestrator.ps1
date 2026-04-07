@@ -93,23 +93,27 @@ if ($Action -eq "Stop") {
         $protectedProcesses = @($protectedProcessesProperty.Value)
     }
 
+    $activeProtected = @()
     if ($protectedProcesses.Count -gt 0) {
-        foreach ($protectedProcess in $protectedProcesses) {
-            $activeProcess = Get-Process -Name $protectedProcess -ErrorAction SilentlyContinue
-
-            if ($null -ne $activeProcess) {
-                $choice = Read-Host "Warning: Protected process [$protectedProcess] is active. Force kill anyway? (Y/N)"
-
-                if ($choice -match "^[Nn]$") {
-                    throw "Abort: User cancelled teardown due to active protected process."
-                }
-
-                if ($choice -match "^[Yy]$") {
-                    Write-Warning "Proceeding with teardown despite active protected process [$protectedProcess]."
-                }
-
-                break
+        foreach ($processName in $protectedProcesses) {
+            $proc = Get-Process -Name $processName -ErrorAction SilentlyContinue
+            if ($null -ne $proc) {
+                $activeProtected += $processName
             }
+        }
+    }
+
+    if ($activeProtected.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Warning: Protected Executables running..." -ForegroundColor Red
+        foreach ($p in $activeProtected) {
+            Write-Host "  - $($p).exe" -ForegroundColor Red
+        }
+        Write-Host "You might lose data if we force kill." -ForegroundColor Yellow
+        $ans = Read-Host "Force kill anyway? (Y/N)"
+
+        if ($ans -match "^[Nn]$") {
+            throw "Abort: User cancelled teardown due to active protected process."
         }
     }
 }
@@ -126,8 +130,19 @@ if ($Action -eq "Start") {
             }
 
             $serviceName = [string]$serviceItem
-            gsudo sc.exe config $serviceName start= demand
-            gsudo net.exe start $serviceName
+            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($null -eq $svcCheck) {
+                Write-Host "Warning: Service '$serviceName' does not exist on this system." -ForegroundColor Yellow
+                $ans = Read-Host "Ignore missing service and continue? (Y/N)"
+                if ($ans -match "^[Nn]$") {
+                    throw "Abort: Required service $serviceName is missing."
+                }
+                continue
+            }
+
+            Write-Host "Starting service: $serviceName..." -ForegroundColor Cyan
+            gsudo sc.exe config $serviceName start= demand 2>&1 | Out-Null
+            gsudo net.exe start $serviceName 2>&1 | Out-Null
 
             $pollStart = Get-Date
             while ($true) {
@@ -213,6 +228,12 @@ if ($Action -eq "Stop") {
             }
 
             $serviceName = [string]$serviceItem
+            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($null -eq $svcCheck) {
+                continue
+            }
+
+            Write-Host "Stopping service: $serviceName..." -ForegroundColor Cyan
             gsudo net.exe stop $serviceName /y 2>&1 | Out-Null
             gsudo sc.exe config $serviceName start= disabled 2>&1 | Out-Null
         }

@@ -53,9 +53,6 @@
     ],
     "executables": [
       "'C:/Program Files/StarDesk/StarDesk.exe'"
-    ],
-    "protected_processes": [
-      "StarDesk"
     ]
   }
 }

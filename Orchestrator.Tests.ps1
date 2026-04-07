@@ -157,12 +157,14 @@ Describe "Phase 2 - Pre-Flight Safety Checks" {
 }
 '@ | Set-Content -Path $script:dbPath -Encoding UTF8
 
-        Mock -CommandName Get-Process -MockWith { @([pscustomobject]@{ Name = "Cubase12" }) }
-        Mock -CommandName Read-Host -MockWith { "N" }
+        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = $Name } }
+        Mock -CommandName Read-Host -MockWith { "N" } -ParameterFilter { $Prompt -eq "Force kill anyway? (Y/N)" }
 
         {
             & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null
         } | Should -Throw "Abort: User cancelled teardown due to active protected process."
+
+        Assert-MockCalled -CommandName Read-Host -Times 1 -Exactly -ParameterFilter { $Prompt -eq "Force kill anyway? (Y/N)" }
     }
 
     It "continues when action is Stop, protected process is active, and user answers Y" {
@@ -174,8 +176,8 @@ Describe "Phase 2 - Pre-Flight Safety Checks" {
 }
 '@ | Set-Content -Path $script:dbPath -Encoding UTF8
 
-        Mock -CommandName Get-Process -MockWith { @([pscustomobject]@{ Name = "Cubase12" }) }
-        Mock -CommandName Read-Host -MockWith { "Y" }
+        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = $Name } }
+        Mock -CommandName Read-Host -MockWith { "Y" } -ParameterFilter { $Prompt -eq "Force kill anyway? (Y/N)" }
 
         $didThrow = $false
         $result = $null
@@ -188,6 +190,7 @@ Describe "Phase 2 - Pre-Flight Safety Checks" {
         $didThrow | Should -BeFalse
         $result | Should -Not -BeNullOrEmpty
         $result.protected_processes | Should -Be @("Cubase12", "WINWORD")
+        Assert-MockCalled -CommandName Read-Host -Times 1 -Exactly -ParameterFilter { $Prompt -eq "Force kill anyway? (Y/N)" }
     }
 }
 
@@ -262,6 +265,8 @@ Describe "Phase 3 - The Start Pipeline" {
         Mock -CommandName Get-Service -MockWith {
             $global:servicePollCount++
             if ($global:servicePollCount -eq 1) {
+                [pscustomobject]@{ Status = "Stopped" }
+            } elseif ($global:servicePollCount -eq 2) {
                 [pscustomobject]@{ Status = "StartPending" }
             } else {
                 [pscustomobject]@{ Status = "Running" }
@@ -271,8 +276,49 @@ Describe "Phase 3 - The Start Pipeline" {
         { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
 
         Assert-MockCalled -CommandName gsudo -Times 2 -Exactly
-        Assert-MockCalled -CommandName Get-Service -Times 2 -Exactly -ParameterFilter { $Name -eq "Audiosrv" }
+        Assert-MockCalled -CommandName Get-Service -Times 3 -Exactly -ParameterFilter { $Name -eq "Audiosrv" }
         Remove-Variable -Name servicePollCount -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "aborts when a required service is missing on Start and user rejects continue" {
+        @'
+{
+  "Audio_Production": {
+    "services": ["FakeService"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName gsudo -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { $null }
+        Mock -CommandName Read-Host -MockWith { "N" }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } |
+            Should -Throw "Abort: Required service FakeService is missing."
+
+        Assert-MockCalled -CommandName gsudo -Times 0 -Exactly
+    }
+
+    It "skips missing service on Start when user chooses to continue" {
+        @'
+{
+  "Audio_Production": {
+    "services": ["FakeService"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName gsudo -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { $null }
+        Mock -CommandName Read-Host -MockWith { "Y" }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
+
+        Assert-MockCalled -CommandName gsudo -Times 0 -Exactly
     }
 
     It "parses quoted executable with arguments and calls Start-Process correctly" {

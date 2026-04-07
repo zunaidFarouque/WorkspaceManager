@@ -1,0 +1,21 @@
+{
+  "_config": {
+    "console_style": "Normal",
+    "notifications": true
+  },
+  "Audio_Production": {
+    "services": [
+      "Audiosrv"
+    ],
+    "executables": [
+      "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe' --profile Live"
+    ],
+    "protected_processes": [
+      "Cubase12.exe",
+      "WINWORD"
+    ],
+    "reverse_relations": [
+      "wuauserv"
+    ]
+  }
+}

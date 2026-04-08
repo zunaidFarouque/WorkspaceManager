@@ -1,58 +1,96 @@
 {
-  "_config": {
-    "console_style": "Normal",
-    "notifications": true
-  },
-  "Audio_Production": {
-    "services": [
-      "Audiosrv"
-    ],
-    "executables": [
-      "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe' --profile Live"
-    ],
-    "protected_processes": [
-      "Cubase12",
-      "WINWORD"
-    ],
-    "reverse_relations": [
-      "wuauserv"
-    ]
-  },
-  "Office": {
-    "services": [
-      "ClickToRunSvc"
-    ],
-    "executables": [
-      "'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"
-    ],
-    "protected_processes": [
-      "WINWORD",
-      "EXCEL",
-      "POWERPNT",
-      "ONENOTE",
-      "OUTLOOK",
-      "MSACCESS",
-      "MSPUB",
-      "OneDrive",
-      "lync",
-      "msteams"
-    ]
-  },
-  "SMB": {
-    "services": [
-      "LanmanServer",
-      "LanmanWorkstation"
-    ],
-    "firewall_groups": [
-      "File and Printer Sharing"
-    ]
-  },
-  "StarDesk": {
-    "services": [
-      "StarDeskService"
-    ],
-    "executables": [
-      "'C:/Program Files/StarDesk/StarDesk.exe'"
-    ]
-  }
+    "_config":  {
+                    "console_style":  "Normal",
+                    "notifications":  true,
+                    "shortcut_prefix_start":  "!Start-",
+                    "shortcut_prefix_stop":  "!Stop-"
+                },
+    "System_Cleanup":  {
+                           "tags":  [
+                                        "Live_Prep",
+                                        "Recovery"
+                                    ],
+                           "type":  "oneshot",
+                           "scripts_start":  [
+                                                 "\u0027C:/Scripts/ClearTempFiles.bat\u0027"
+                                             ]
+                       },
+    "HAGS_Disable_Live":  {
+                              "tags":  [
+                                           "Live_Prep"
+                                       ],
+                              "registry_toggles":  [
+                                                       {
+                                                           "path":  "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+                                                           "name":  "HwSchMode",
+                                                           "value":  1,
+                                                           "type":  "DWord"
+                                                       }
+                                                   ]
+                          },
+    "HW_Eradicate_Interrupts":  {
+                                    "tags":  [
+                                                 "Live_Stage"
+                                             ],
+                                    "pnp_devices_disable":  [
+                                                                "*ACPI*",
+                                                                "*Bluetooth*",
+                                                                "*Camera*",
+                                                                "*Webcam*",
+                                                                "*Windows Hello*"
+                                                            ]
+                                },
+    "HW_Network_Isolate":  {
+                               "tags":  [
+                                            "Live_Stage"
+                                        ],
+                               "pnp_devices_disable":  [
+                                                           "*Wi-Fi*",
+                                                           "*2.5GbE*"
+                                                       ]
+                           },
+    "Env_Max_Performance":  {
+                                "tags":  [
+                                             "Live_Stage"
+                                         ],
+                                "power_plan":  "Ultimate Performance",
+                                "scripts_start":  [
+                                                      "\u0027C:/Scripts/MultiMonitor60Hz.bat\u0027",
+                                                      "\u0027C:/Scripts/DisableWindowsUpdates.bat\u0027",
+                                                      "\u0027C:/Scripts/GigabyteFan80.bat\u0027"
+                                                  ],
+                                "scripts_stop":  [
+                                                     "\u0027C:/Scripts/MultiMonitorDefault.bat\u0027",
+                                                     "\u0027C:/Scripts/EnableWindowsUpdates.bat\u0027",
+                                                     "\u0027C:/Scripts/GigabyteFanAuto.bat\u0027"
+                                                 ]
+                            },
+    "Audio_Production_Live":  {
+                                  "tags":  [
+                                               "Live_Stage"
+                                           ],
+                                  "services":  [
+                                                   "Audiosrv"
+                                               ],
+                                  "executables":  [
+                                                      "\u0027C:/Program Files/Steinberg/Cubase 12/Cubase12.exe\u0027 --profile Live"
+                                                  ],
+                                  "protected_processes":  [
+                                                              "Cubase12"
+                                                          ]
+                              },
+    "Recovery_Standard_Mode":  {
+                                   "tags":  [
+                                                "Recovery"
+                                            ],
+                                   "power_plan":  "Balanced",
+                                   "registry_toggles":  [
+                                                            {
+                                                                "path":  "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+                                                                "name":  "HwSchMode",
+                                                                "value":  2,
+                                                                "type":  "DWord"
+                                                            }
+                                                        ]
+                               }
 }

@@ -2,8 +2,14 @@ function Get-WorkspaceState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [psobject]$Workspace
+        [psobject]$Workspace,
+        [array]$PnpCache = $null
     )
+
+    $typeProperty = $Workspace.PSObject.Properties["type"]
+    if ($null -ne $typeProperty -and [string]$typeProperty.Value -eq "oneshot") {
+        return "Idle"
+    }
 
     $totalServices = 0
     $runningServices = 0
@@ -15,6 +21,9 @@ function Get-WorkspaceState {
         foreach ($serviceItem in @($servicesProperty.Value)) {
             $serviceName = [string]$serviceItem
             if ([string]::IsNullOrWhiteSpace($serviceName)) {
+                continue
+            }
+            if ($serviceName -match '^#') {
                 continue
             }
             if ($serviceName -match '^t\s+(\d+)$') {
@@ -41,6 +50,9 @@ function Get-WorkspaceState {
         foreach ($executableItem in @($executablesProperty.Value)) {
             $executionToken = [string]$executableItem
             if ([string]::IsNullOrWhiteSpace($executionToken)) {
+                continue
+            }
+            if ($executionToken -match '^#') {
                 continue
             }
             if ($executionToken -match '^t\s+(\d+)$') {
@@ -72,6 +84,76 @@ function Get-WorkspaceState {
 
     $totalItems = $totalServices + $totalExecutables
     $runningItems = $runningServices + $runningExecutables
+
+    $pnpEnableProperty = $Workspace.PSObject.Properties["pnp_devices_enable"]
+    if ($null -ne $pnpEnableProperty) {
+        foreach ($friendlyName in @($pnpEnableProperty.Value)) {
+            $devName = [string]$friendlyName
+            if ([string]::IsNullOrWhiteSpace($devName)) { continue }
+            if ($devName -match '^#') { continue }
+            $totalItems++
+            if ($null -ne $PnpCache) {
+                $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
+            } else {
+                $cimName = $devName -replace '\*', '%'
+                $dev = Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '$cimName'" -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($null -ne $dev -and $dev.Status -eq "OK") {
+                $runningItems++
+            }
+        }
+    }
+
+    $pnpDisableProperty = $Workspace.PSObject.Properties["pnp_devices_disable"]
+    if ($null -ne $pnpDisableProperty) {
+        foreach ($friendlyName in @($pnpDisableProperty.Value)) {
+            $devName = [string]$friendlyName
+            if ([string]::IsNullOrWhiteSpace($devName)) { continue }
+            if ($devName -match '^#') { continue }
+            $totalItems++
+            if ($null -ne $PnpCache) {
+                $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
+            } else {
+                $cimName = $devName -replace '\*', '%'
+                $dev = Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '$cimName'" -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($null -eq $dev -or $dev.Status -ne "OK") {
+                $runningItems++
+            }
+        }
+    }
+
+    $powerPlanProperty = $Workspace.PSObject.Properties["power_plan"]
+    if ($null -ne $powerPlanProperty -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanProperty.Value)) {
+        $planName = [string]$powerPlanProperty.Value
+        $totalItems++
+        $active = powercfg /getactivescheme
+        if ($active -match [regex]::Escape($planName)) {
+            $runningItems++
+        }
+    }
+
+    $registryTogglesProperty = $Workspace.PSObject.Properties["registry_toggles"]
+    if ($null -ne $registryTogglesProperty) {
+        foreach ($item in @($registryTogglesProperty.Value)) {
+            if ($null -eq $item) { continue }
+            $pathProp = $item.PSObject.Properties["path"]
+            $nameProp = $item.PSObject.Properties["name"]
+            $valueProp = $item.PSObject.Properties["value"]
+            if ($null -eq $pathProp -or $null -eq $nameProp -or $null -eq $valueProp) { continue }
+
+            $path = [string]$pathProp.Value
+            $name = [string]$nameProp.Value
+            $expectedValue = $valueProp.Value
+            if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($name)) { continue }
+
+            $totalItems++
+            $val = Get-ItemPropertyValue -Path $path -Name $name -ErrorAction SilentlyContinue
+            if ($val -eq $expectedValue) {
+                $runningItems++
+            }
+        }
+    }
 
     if ($totalItems -eq 0) {
         return "Stopped"

@@ -1,0 +1,73 @@
+{
+  "_config": {
+    "console_style": "Normal",
+    "notifications": true,
+    "shortcut_prefix_start": "!Start-",
+    "shortcut_prefix_stop": "!Stop-"
+  },
+  "System_Cleanup": {
+    "tags": ["Live_Prep", "Recovery"],
+    "type": "oneshot",
+    "scripts_start": ["'C:/Scripts/ClearTempFiles.bat'"]
+  },
+  "HAGS_Disable_Live": {
+    "tags": ["Live_Prep"],
+    "registry_toggles": [
+      {
+        "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+        "name": "HwSchMode",
+        "value": 1,
+        "type": "DWord"
+      }
+    ]
+  },
+  "HW_Eradicate_Interrupts": {
+    "tags": ["Live_Stage"],
+    "pnp_devices_disable": [
+      "*ACPI*",
+      "*Bluetooth*",
+      "*Camera*",
+      "*Image*",
+      "*Biometric*",
+      "*MTD*"
+    ]
+  },
+  "HW_Network_Isolate": {
+    "tags": ["Live_Stage"],
+    "pnp_devices_disable": ["*Wi-Fi*", "*2.5GbE*"]
+  },
+  "Env_Max_Performance": {
+    "tags": ["Live_Stage"],
+    "power_plan": "Ultimate Performance",
+    "scripts_start": [
+      "'C:/Scripts/MultiMonitor60Hz.bat'",
+      "'C:/Scripts/DisableWindowsUpdates.bat'",
+      "'C:/Scripts/GigabyteFan80.bat'"
+    ],
+    "scripts_stop": [
+      "'C:/Scripts/MultiMonitorDefault.bat'",
+      "'C:/Scripts/EnableWindowsUpdates.bat'",
+      "'C:/Scripts/GigabyteFanAuto.bat'"
+    ]
+  },
+  "Audio_Production_Live": {
+    "tags": ["Live_Stage"],
+    "services": ["Audiosrv"],
+    "executables": [
+      "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe' --profile Live"
+    ],
+    "protected_processes": ["Cubase12"]
+  },
+  "Recovery_Standard_Mode": {
+    "tags": ["Recovery"],
+    "power_plan": "Balanced",
+    "registry_toggles": [
+      {
+        "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+        "name": "HwSchMode",
+        "value": 2,
+        "type": "DWord"
+      }
+    ]
+  }
+}

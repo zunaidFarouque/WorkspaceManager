@@ -8,11 +8,23 @@ To ensure the orchestration engine parses your environment flawlessly and safely
 
 ```json
 {
+  "comment": "Top-level note: this file configures workstation modes.",
+  "description": "WorkspaceManager profiles for this machine.",
   "_config": {
     "shortcut_prefix_start": "!Start-",
     "shortcut_prefix_stop": "!Stop-"
   },
   "Audio_Production": {
+    "comment": "Live tracking and low-latency profile.",
+    "description": "Primary DAW workspace for recording sessions.",
+    "type": "stateful",
+    "tags": ["Audio", "Live"],
+    "power_plan": "High performance",
+    "pnp_devices_enable": ["*USB Audio*"],
+    "pnp_devices_disable": ["*Bluetooth*"],
+    "registry_toggles": [
+      { "path": "HKLM:\\SOFTWARE\\Contoso\\Audio", "name": "LowLatency", "value": 1, "type": "DWord" }
+    ],
     "services": [
       "eLicenserSvc",
       "t 3000",
@@ -113,3 +125,67 @@ Prefix a service or executable with `?` to mark it optional.
 * Behavior:
   * If an optional item is missing on the host machine, the engine silently skips it.
   * No prompt and no terminating error are raised for missing optional items.
+
+### 10. Ignored Operator (`#`) For Actionable Arrays
+Prefix any actionable string-array item with `#` to fully ignore it at runtime.
+
+* Applies to actionable arrays used by state/orchestration/editor workflows:
+  * `services`, `executables`, `scripts_start`, `scripts_stop`, `pnp_devices_enable`, `pnp_devices_disable`, `reverse_relations`, `protected_processes`
+* Ignored items are skipped by the engine:
+  * no command is executed for that item
+  * state math does not count that item
+* Dashboard behavior:
+  * ignored entries can be toggled on/off from the editor view
+  * details view can hide/show ignored entries with `F2`
+
+Example:
+* Before: `"pnp_devices_disable": ["*Camera*"]`
+* Ignored: `"pnp_devices_disable": ["#*Camera*"]`
+
+### 11. Workspace Type (`type`)
+Each workspace may define an optional `type` value.
+
+* Valid values:
+  * `"stateful"` (default)
+  * `"oneshot"`
+* `stateful` workspaces use normal runtime state math (`Ready` / `Stopped` / `Mixed`).
+* `oneshot` workspaces are stateless triggers. They do not measure running state and are treated as `Idle` until explicitly run.
+  * In Dashboard, oneshot entries are shown as triggerable tasks.
+  * In commit flow, oneshot `Run` maps to Orchestrator `Start` only.
+
+**Dashboard TUI (main list):**
+
+* **[Space]** toggles the *desired* outcome for commit. For stateful workspaces, desired maps to Orchestrator **Start** when `Ready` and **Stop** when `Stopped`.
+* When **current** state is **Mixed**, [Space] only flips the desired target between `Ready` and `Stopped` (push toward full up or full down). The first press from `Mixed` / `Mixed` sets desired to `Ready`.
+* **[Backspace]** clears a pending desired change: desired is reset to **current** for stateful workspaces, or to `Idle` for oneshot (clears a queued **Run**). Those rows then contribute no delta on **Commit**.
+
+### 12. Workspace Tags (`tags`)
+Each workspace may define an optional `tags` array for Dashboard categorization tabs.
+
+* Example:
+  * `"tags": ["Live", "Audio"]`
+* Tags are used for tab filtering in the Dashboard UI (for example: `All`, `Live`, `Audio`).
+
+### 13. Hardware, Power, and Registry Desired State
+These keys let a workspace enforce host-level desired state.
+
+* `pnp_devices_enable`: array of FriendlyName patterns (wildcards supported). Matching devices must be enabled.
+  * Example: `"pnp_devices_enable": ["*USB Audio*"]`
+* `pnp_devices_disable`: array of FriendlyName patterns (wildcards supported). Matching devices must be disabled.
+  * Example: `"pnp_devices_disable": ["*Bluetooth*"]`
+* `power_plan`: exact friendly name of the power plan that must be active.
+  * Example: `"power_plan": "High performance"`
+* `registry_toggles`: array of objects in this format:
+  * `{"path":"HKLM:\\...","name":"KeyName","value":1,"type":"DWord"}`
+
+Stop behavior note:
+* `power_plan` and `registry_toggles` are not automatically reverted on Stop.
+* Use a dedicated Recovery workspace if you need reversible profile behavior.
+
+### 14. Metadata Keys (`comment` and `description`)
+To support human-readable notes inside strict JSON, metadata keys are allowed.
+
+* `comment`: free-text note used as inline JSON comment replacement.
+* `description`: free-text workspace/config description (reserved for richer terminal UI usage in the future).
+* These keys are allowed at top-level and inside workspace/config objects.
+* For current runtime behavior, both keys are metadata-only and do not change Start/Stop/state logic.

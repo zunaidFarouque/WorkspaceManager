@@ -37,7 +37,7 @@ Describe "WorkspaceManager Phase 1 - Ingestion and Input Sanitization" {
         @'
 {
   "Audio_Production": {
-    "protected_processes": ["Cubase12.exe",],
+    "protected_processes": [Cubase12.exe]
   }
 }
 '@ | Set-Content -Path $script:dbPath -Encoding UTF8
@@ -82,6 +82,30 @@ Describe "WorkspaceManager Phase 1 - Ingestion and Input Sanitization" {
         $result = & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start"
 
         $result | Should -Not -BeNullOrEmpty
+        $result.protected_processes | Should -Be @("Cubase12")
+    }
+
+    It "allows top-level and workspace metadata keys without affecting workspace lookup" {
+        @'
+{
+  "comment": "Machine profile notes",
+  "description": "Top-level descriptor",
+  "_config": {
+    "notifications": true
+  },
+  "Audio_Production": {
+    "comment": "Workspace note",
+    "description": "Workspace descriptor",
+    "protected_processes": ["Cubase12.exe"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        $result = & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start"
+
+        $result | Should -Not -BeNullOrEmpty
+        $result.comment | Should -Be "Workspace note"
+        $result.description | Should -Be "Workspace descriptor"
         $result.protected_processes | Should -Be @("Cubase12")
     }
 
@@ -411,6 +435,7 @@ Describe "Phase 3 - The Start Pipeline" {
 }
 '@ | Set-Content -Path $script:dbPath -Encoding UTF8
 
+        Mock -CommandName Test-Path -MockWith { $true } -ParameterFilter { $LiteralPath -eq "C:/StartScript.ps1" }
         Mock -CommandName Start-Process -MockWith { }
 
         { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
@@ -421,6 +446,92 @@ Describe "Phase 3 - The Start Pipeline" {
             $Wait -eq $true -and
             $NoNewWindow -eq $true
         }
+    }
+
+    It "aborts when a required script is missing on Start and user rejects continue" {
+        @'
+{
+  "Audio_Production": {
+    "scripts_start": ["'C:/MissingStart.bat'"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName Test-Path -MockWith { $false } -ParameterFilter { $LiteralPath -eq "C:/MissingStart.bat" }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Read-Host -MockWith { "N" } -ParameterFilter { $Prompt -eq "Ignore missing script and continue? (Y/N)" }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } |
+            Should -Throw "Abort: Required script is missing: C:/MissingStart.bat"
+
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
+    }
+
+    It "skips optional missing script on Start without prompting or throwing" {
+        @'
+{
+  "Audio_Production": {
+    "scripts_start": ["'?C:/MissingOptional.bat'"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName Test-Path -MockWith { $false } -ParameterFilter { $LiteralPath -eq "C:/MissingOptional.bat" }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Read-Host -MockWith { throw "Read-Host should not be called for optional scripts." }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
+
+        Assert-MockCalled -CommandName Read-Host -Times 0 -Exactly
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
+    }
+
+    It "applies DSC start commands for PnP, power plan, and registry toggles" {
+        @'
+{
+  "Audio_Production": {
+    "pnp_devices_enable": ["USB Audio"],
+    "pnp_devices_disable": ["Bluetooth"],
+    "power_plan": "High performance",
+    "registry_toggles": [
+      { "path": "HKLM:\\SOFTWARE\\Contoso", "name": "LowLatency", "value": 1, "type": "DWord" }
+    ]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        $global:gsudoCalls = @()
+        $global:powercfgCalls = @()
+        Mock -CommandName gsudo -MockWith {
+            $global:gsudoCalls += ,($args -join " ")
+            "ok"
+        }
+        Mock -CommandName powercfg -MockWith {
+            $global:powercfgCalls += ,($args -join " ")
+            if ($args[0] -eq "/l") {
+                "Power Scheme GUID: 11111111-2222-3333-4444-555555555555  (High performance)"
+            } else {
+                "ok"
+            }
+        }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
+
+        $decodedPnp = @($global:gsudoCalls | ForEach-Object {
+            if ($_ -match '^powershell -NoProfile -EncodedCommand (\S+)$') {
+                [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($matches[1]))
+            }
+        })
+        $decodedPnp | Should -Contain 'Get-PnpDevice -FriendlyName "USB Audio" -ErrorAction SilentlyContinue | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue'
+        $decodedPnp | Should -Contain 'Get-PnpDevice -FriendlyName "Bluetooth" -ErrorAction SilentlyContinue | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue'
+        $global:gsudoCalls | Should -Contain "New-ItemProperty -Path HKLM:\SOFTWARE\Contoso -Name LowLatency -Value 1 -PropertyType DWord -Force"
+        $global:powercfgCalls | Should -Contain "/l"
+        $global:powercfgCalls | Should -Contain "/setactive 11111111-2222-3333-4444-555555555555"
+        Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name powercfgCalls -Scope Global -ErrorAction SilentlyContinue
     }
 
     It "calls Show-Notification at the end of a successful Start when notifications are enabled" {
@@ -451,6 +562,31 @@ Describe "Phase 3 - The Start Pipeline" {
         if (Test-Path Function:\Show-Notification) {
             Remove-Item Function:\Show-Notification
         }
+    }
+
+    It "skips ignored # items in Start actionable arrays" {
+        @'
+{
+  "Audio_Production": {
+    "services": ["#IgnoredService"],
+    "scripts_start": ["#'C:/IgnoredStart.bat'"],
+    "executables": ["#C:/Ignored.exe"],
+    "pnp_devices_enable": ["#IgnoredEnable"],
+    "pnp_devices_disable": ["#IgnoredDisable"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName gsudo -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Start" | Out-Null } | Should -Not -Throw
+
+        Assert-MockCalled -CommandName Get-Service -Times 0 -Exactly
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
+        Assert-MockCalled -CommandName gsudo -Times 0 -Exactly
     }
 }
 
@@ -585,6 +721,7 @@ Describe "Phase 4 - The Stop Pipeline" {
 }
 '@ | Set-Content -Path $script:dbPath -Encoding UTF8
 
+        Mock -CommandName Test-Path -MockWith { $true } -ParameterFilter { $LiteralPath -eq "C:/StopScript.bat" }
         Mock -CommandName Start-Process -MockWith { }
 
         { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null } | Should -Not -Throw
@@ -594,6 +731,69 @@ Describe "Phase 4 - The Stop Pipeline" {
             $Wait -eq $true -and
             $NoNewWindow -eq $true
         }
+    }
+
+    It "aborts when a required script is missing on Stop and user rejects continue" {
+        @'
+{
+  "Audio_Production": {
+    "protected_processes": [],
+    "scripts_stop": ["'C:/MissingStop.bat'"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName Test-Path -MockWith { $false } -ParameterFilter { $LiteralPath -eq "C:/MissingStop.bat" }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Read-Host -MockWith { "N" } -ParameterFilter { $Prompt -eq "Ignore missing script and continue? (Y/N)" }
+        Mock -CommandName Get-Process -MockWith { $null }
+        Mock -CommandName gsudo -MockWith { }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null } |
+            Should -Throw "Abort: Required script is missing: C:/MissingStop.bat"
+
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
+    }
+
+    It "inverts PnP device targets on Stop and warns for non-reverted power/registry" {
+        @'
+{
+  "Audio_Production": {
+    "pnp_devices_enable": ["USB Audio"],
+    "pnp_devices_disable": ["Bluetooth"],
+    "power_plan": "High performance",
+    "registry_toggles": [
+      { "path": "HKLM:\\SOFTWARE\\Contoso", "name": "LowLatency", "value": 1, "type": "DWord" }
+    ]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        $global:gsudoCalls = @()
+        Mock -CommandName gsudo -MockWith {
+            $global:gsudoCalls += ,($args -join " ")
+            "ok"
+        }
+        Mock -CommandName Write-Host -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Get-Process -MockWith { $null }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null } | Should -Not -Throw
+
+        $decodedPnp = @($global:gsudoCalls | ForEach-Object {
+            if ($_ -match '^powershell -NoProfile -EncodedCommand (\S+)$') {
+                [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($matches[1]))
+            }
+        })
+        $decodedPnp | Should -Contain 'Get-PnpDevice -FriendlyName "USB Audio" -ErrorAction SilentlyContinue | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue'
+        $decodedPnp | Should -Contain 'Get-PnpDevice -FriendlyName "Bluetooth" -ErrorAction SilentlyContinue | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue'
+        Assert-MockCalled -CommandName Write-Host -Times 1 -ParameterFilter {
+            $Object -eq "Note: Power Plan and Registry toggles are not automatically reverted on Stop. Use a Recovery workspace." -and
+            $ForegroundColor -eq "Yellow"
+        }
+        Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
     }
 
     It "calls Show-Notification at the end of a successful Stop when notifications are enabled" {
@@ -625,5 +825,35 @@ Describe "Phase 4 - The Stop Pipeline" {
         if (Test-Path Function:\Show-Notification) {
             Remove-Item Function:\Show-Notification
         }
+    }
+
+    It "skips ignored # items in Stop actionable arrays" {
+        @'
+{
+  "Audio_Production": {
+    "protected_processes": ["#IgnoredProtected"],
+    "scripts_stop": ["#C:/IgnoredStop.bat"],
+    "executables": ["#C:/Ignored.exe"],
+    "services": ["#IgnoredService"],
+    "pnp_devices_enable": ["#IgnoredEnable"],
+    "pnp_devices_disable": ["#IgnoredDisable"],
+    "reverse_relations": ["#IgnoredReverse"]
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        Mock -CommandName gsudo -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Get-Process -MockWith { $null }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
+        Mock -CommandName Read-Host -MockWith { "Y" }
+
+        { & $script:scriptPath -WorkspaceName "Audio_Production" -Action "Stop" | Out-Null } | Should -Not -Throw
+
+        Assert-MockCalled -CommandName Get-Process -Times 0 -Exactly
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
+        Assert-MockCalled -CommandName Get-Service -Times 0 -Exactly
+        Assert-MockCalled -CommandName gsudo -Times 0 -Exactly
     }
 }

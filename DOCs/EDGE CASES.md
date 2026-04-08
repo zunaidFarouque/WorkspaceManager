@@ -23,6 +23,7 @@ When orchestrating native Windows services and executables, the engine must hand
 **The Solution:**
 * **Interactive Triage:** The engine utilizes a timeout protocol during the teardown phase. If an executable is commanded to terminate but remains detected in RAM after the timeout period, the engine immediately halts the teardown sequence. The Workspace is flagged as `Mixed` (Yellow), and the user is prompted via the CLI/Dashboard: 
   > *"Process [Name] is unresponsive. [F] Force Kill (Risk of data loss) or [M] Manually Investigate?"*
+* **Dashboard:** When a row’s current state is `Mixed`, **Space** toggles only the desired **Start** vs **Stop** target (`Ready` vs `Stopped`). **Backspace** drops any pending desired change so **Commit** leaves that workspace untouched.
 
 ## 4. The Indexing Ghost (PowerToys & Search Cache)
 **The Problem:** The "Quick Run" mode relies on Windows indexing `.lnk` shortcuts for tools like PowerToys Run or Windows Search. Rapidly creating, deleting, or modifying these shortcuts via automated scripts can break the Windows Search cache, causing shortcuts to disappear or ghost entries to remain.

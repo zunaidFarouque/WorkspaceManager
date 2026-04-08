@@ -4,6 +4,9 @@
     "notifications": true
   },
   "Audio_Production": {
+    "tags": [
+      "Main"
+    ],
     "services": [
       "Audiosrv"
     ],
@@ -19,6 +22,9 @@
     ]
   },
   "Office": {
+    "tags": [
+      "Main"
+    ],
     "services": [
       "ClickToRunSvc"
     ],
@@ -39,6 +45,9 @@
     ]
   },
   "SMB": {
+    "tags": [
+      "Services"
+    ],
     "services": [
       "LanmanServer",
       "LanmanWorkstation"
@@ -48,6 +57,9 @@
     ]
   },
   "StarDesk": {
+    "tags": [
+      "Main"
+    ],
     "services": [
       "StarDeskService"
     ],

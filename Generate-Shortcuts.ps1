@@ -43,9 +43,10 @@ Get-ChildItem -Path $shortcutDir -Filter "*.lnk" -File -ErrorAction SilentlyCont
 
 $wshShell = New-Object -ComObject WScript.Shell
 $orchestratorPath = Join-Path -Path $PSScriptRoot -ChildPath "Orchestrator.ps1"
+$metadataKeys = @("_config", "comment", "description")
 
 foreach ($workspaceName in $db.PSObject.Properties.Name) {
-    if ($workspaceName -eq "_config") {
+    if ($metadataKeys -contains $workspaceName) {
         continue
     }
 

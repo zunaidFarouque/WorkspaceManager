@@ -1,22 +1,24 @@
-- let user create sections in the GUI: for example, my "Live performance" section might have subsections e.g. steinberg licenses (just example), also the extreme device disabling thing should be customizable. my device disabling is like this: Bluetooth, wifi, 
+A mode can never be mixed. it can only be active or none (inactive).
 
+- on tab 2, 
+    - we need to be able to make active an environment: change the calculation in tab 3 + Write in our memory json. dont apply changes to hardware complience. the change is only the calculation for tab 3, and the change should happen instantly. so if I go to tab 3, I should get new color applied based on the selection.
+    - we need to be able to apply ideal target state: auto apply necessary changes in the tab 3.
 
+- on tab 3,
+    - we will be able to on/off hardware complience manually
+    - if ideal applied from tab 2, the changes (on/off delta) is already placed in the tab 3. user can override (space button)/remove some change with backspace button
 
+so workflow can be:
+"I just need pure live performance":
+1. open dashboard
+2. go to tab 2 and make live performace mode active+apply
+4. enter to commit
 
+or
+"I need pure live performance with wifi":
+1. open dashboard
+2. go to tab 2 and make live performace mode active+apply
+3. go to tab 3 and remove change on wifi using backspace (or make it on by toggling on using space if it is currntly off)
+4. enter to commit
 
-
-```
-Thank you...
-
-now, we need to do a difficult but thoughtful thing.
-We will create the tab for live performance. It includes everything for the live performance setup:
-1. HAGS (we handle natively)
-2. Monitor refresh rates (can we handle natively? if yes, how will we apply the changes? if things are getting difficult, put placeholder for me so I can point to my custom script/shortcut)
-3. Devices disabling (handle natively. keep wifi, ethernet, bluetooth separate (i might turn them on/off by combination). put camera, biometrics and SD Card in a one thing)
-4. Power plan (handle natively. the plan should start to power plan `Max Performance`, if reverted, it should go to `Balanced`)
-5. widows update (I want to point to my shortcut. Windows Update Blocker (portable software installed with scoop) handles it and updates it)
-6. Custom fan speed (I want to point to my shortcut)
-7. windows search indexer (handle natively)
-
-basically, we are recreating the whole list of task into one seamless experience.
-```
+we give flexibility to people.

@@ -1,286 +1,174 @@
 Set-StrictMode -Version Latest
 
-Describe "Workspace State Analyzer" {
+Describe "Workspace State Engine (Declarative Matrix)" {
     BeforeAll {
         $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:statePath = Join-Path -Path $script:here -ChildPath "state.json"
+        $script:stateBackupPath = Join-Path -Path $script:here -ChildPath "state.json.test-backup"
+        if (Test-Path -Path $script:stateBackupPath) {
+            Remove-Item -Path $script:stateBackupPath -Force
+        }
+        if (Test-Path -Path $script:statePath) {
+            Move-Item -Path $script:statePath -Destination $script:stateBackupPath -Force
+        }
         . (Join-Path -Path $script:here -ChildPath "WorkspaceState.ps1")
     }
 
-    It "returns Ready when all services and executables are running" {
-        $workspace = [pscustomobject]@{
-            services    = @("Audiosrv")
-            executables = @("'C:/Program Files/App.exe' --hidden")
+    AfterAll {
+        if (Test-Path -Path $script:statePath) {
+            Remove-Item -Path $script:statePath -Force
         }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
-    }
-
-    It "returns Stopped when no services or executables are running" {
-        $workspace = [pscustomobject]@{
-            services    = @("Audiosrv")
-            executables = @("C:/Tools/App.exe")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
-        Mock -CommandName Get-Process -MockWith { $null }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Stopped"
-    }
-
-    It "returns Mixed when only one of two items is running" {
-        $workspace = [pscustomobject]@{
-            services    = @("Audiosrv")
-            executables = @("C:/Tools/App.exe")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { $null }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Mixed"
-    }
-
-    It "returns Stopped for an empty workspace" {
-        $workspace = [pscustomobject]@{}
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "Anything" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Stopped"
-    }
-
-    It "strips path arguments and .exe before Get-Process lookup" {
-        $workspace = [pscustomobject]@{
-            executables = @("'C:/My Folder/My App.exe' --hidden --profile live")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "My App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-
-        $state | Should -Be "Ready"
-        Assert-MockCalled -CommandName Get-Process -Times 1 -Exactly -ParameterFilter {
-            $Name -eq "My App"
+        if (Test-Path -Path $script:stateBackupPath) {
+            Move-Item -Path $script:stateBackupPath -Destination $script:statePath -Force
         }
     }
 
-    It "ignores timer tokens in services and executables when calculating state" {
-        $workspace = [pscustomobject]@{
-            services    = @("warp-svc", "t 2000")
-            executables = @("'C:/App.exe'", "t 3000")
+    BeforeEach {
+        if (Test-Path -Path $script:statePath) {
+            Remove-Item -Path $script:statePath -Force
         }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
-    }
-
-    It "does not penalize missing optional service in state totals" {
-        $workspace = [pscustomobject]@{
-            services    = @("?MissingService")
-            executables = @("'C:/App.exe'")
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
-    }
-
-    It "returns Idle for oneshot workspaces" {
-        $workspace = [pscustomobject]@{
-            type        = "oneshot"
-            services    = @("Audiosrv")
-            executables = @("C:/Tools/App.exe")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Idle"
-    }
-
-    It "ignores metadata keys when calculating workspace state" {
-        $workspace = [pscustomobject]@{
-            comment     = "Do not parse as workload"
-            description = "Reserved for future UI output"
-            services    = @("Audiosrv")
-            executables = @("C:/Tools/App.exe")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
-    }
-
-    It "returns Ready when DSC targets are compliant" {
-        $workspace = [pscustomobject]@{
-            pnp_devices_enable  = @("USB Audio")
-            pnp_devices_disable = @("Bluetooth")
-            power_plan_start    = "High performance"
-            registry_toggles    = @(
-                [pscustomobject]@{
-                    path         = "HKLM:\SOFTWARE\Contoso"
-                    name         = "LowLatency"
-                    value_start  = 1
-                    type         = "DWord"
+        $script:config = [pscustomobject]@{
+            Hardware_Definitions = [pscustomobject]@{
+                Windows_Update = [pscustomobject]@{
+                    type = "service"
+                    name = "wuauserv"
                 }
-            )
+                GPU_Scheduling_HAGS = [pscustomobject]@{
+                    type = "registry"
+                    path = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
+                    name = "HwSchMode"
+                    value_on = 2
+                    value_off = 1
+                }
+                Bluetooth_Radio = [pscustomobject]@{
+                    type = "pnp_device"
+                    match = @("*Bluetooth*")
+                }
+                Display_Refresh_Rate = [pscustomobject]@{
+                    type = "stateless"
+                }
+            }
+            System_Modes = [pscustomobject]@{
+                Live_Stage_Life = [pscustomobject]@{
+                    power_plan = "Ultimate Performance"
+                    targets = [pscustomobject]@{
+                        Windows_Update = "OFF"
+                        GPU_Scheduling_HAGS = "OFF"
+                    }
+                }
+                Eco_Life = [pscustomobject]@{
+                    power_plan = "Power saver"
+                    targets = [pscustomobject]@{
+                        Display_Refresh_Rate = "ANY"
+                        Bluetooth_Radio = "ANY"
+                    }
+                }
+            }
+            App_Workloads = [pscustomobject]@{
+                DAW_Cubase = [pscustomobject]@{
+                    services = @("Audiosrv")
+                    executables = @("'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe'")
+                }
+            }
         }
+    }
 
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName Get-CimInstance -MockWith {
-            if ($Filter -match "USB Audio") { return [pscustomobject]@{ Status = "OK" } }
-            if ($Filter -match "Bluetooth") { return [pscustomobject]@{ Status = "Error" } }
+    It "marks App_Workload as Active when all declared checks are running" {
+        '{"Active_System_Mode":"Live_Stage_Life"}' | Set-Content -Path $script:statePath -Encoding UTF8
+        Mock -CommandName Get-Service -MockWith {
+            param([string]$Name)
+            if ($Name -eq "Audiosrv") { return [pscustomobject]@{ Status = "Running" } }
+            if ($Name -eq "wuauserv") { return [pscustomobject]@{ Status = "Stopped" } }
             return $null
         }
-        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)" }
+        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "Cubase12" } }
         Mock -CommandName Get-ItemPropertyValue -MockWith { 1 }
+        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 1234  (Ultimate Performance)" }
+        Mock -CommandName Get-CimInstance -MockWith { $null }
 
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
+        $state = Get-WorkspaceState -Workspace $script:config
+
+        $state.AppWorkloads.DAW_Cubase.Status | Should -Be "Active"
+        $state.AppWorkloads.DAW_Cubase.MatchedChecks | Should -Be 2
+        $state.AppWorkloads.DAW_Cubase.TotalChecks | Should -Be 2
     }
 
-    It "returns Ready when services_disable targets are not Running" {
-        $workspace = [pscustomobject]@{
-            services_disable = @("wuauserv", "WSearch")
+    It "uses persisted Active_System_Mode for strict Active/Inactive status" {
+        '{"Active_System_Mode":"Live_Stage_Life"}' | Set-Content -Path $script:statePath -Encoding UTF8
+        Mock -CommandName Get-Service -MockWith {
+            param([string]$Name)
+            if ($Name -eq "Audiosrv") { return [pscustomobject]@{ Status = "Stopped" } }
+            if ($Name -eq "wuauserv") { return [pscustomobject]@{ Status = "Running" } }
+            return $null
         }
+        Mock -CommandName Get-Process -MockWith { $null }
+        Mock -CommandName Get-ItemPropertyValue -MockWith { 2 }
+        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 1234  (Ultimate Performance)" }
+        Mock -CommandName Get-CimInstance -MockWith { $null }
 
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
+        $state = Get-WorkspaceState -Workspace $script:config
+        $wuRow = @($state.Compliance | Where-Object { $_.Component -eq "Windows_Update" })[0]
 
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Ready"
+        $state.SystemModes.Live_Stage_Life.Status | Should -Be "Active"
+        [string]$state.SystemModes.Eco_Life.Status | Should -Be "Inactive"
+        $wuRow.TargetState | Should -Be "OFF"
+        $wuRow.PhysicalState | Should -Be "ON"
+        $wuRow.IsCompliant | Should -BeFalse
     }
 
-    It "returns Stopped when a required services_disable target is still Running" {
-        $workspace = [pscustomobject]@{
-            services_disable = @("wuauserv")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Stopped"
-    }
-
-    It "treats pnp_devices_disable status OK as non-compliant" {
-        $workspace = [pscustomobject]@{
-            pnp_devices_disable = @("Bluetooth")
-        }
-
+    It "builds compliance rows once per hardware definition using active mode targets" {
+        '{"Active_System_Mode":"Eco_Life"}' | Set-Content -Path $script:statePath -Encoding UTF8
         Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
         Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName Get-CimInstance -MockWith { [pscustomobject]@{ Status = "OK" } }
-        Mock -CommandName powercfg -MockWith { "" }
         Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
+        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 9999  (Power saver)" }
+        Mock -CommandName Get-CimInstance -MockWith { [pscustomobject]@{ Name = "Bluetooth Device"; Status = "Error" } }
 
-        $state = Get-WorkspaceState -Workspace $workspace
-        $state | Should -Be "Stopped"
+        $state = Get-WorkspaceState -Workspace $script:config
+        $rows = @($state.Compliance)
+        $bluetoothRow = @($rows | Where-Object { $_.Component -eq "Bluetooth_Radio" })[0]
+        $wuRow = @($rows | Where-Object { $_.Component -eq "Windows_Update" })[0]
+
+        $state.SystemModes.Eco_Life.Status | Should -Be "Active"
+        [string]$state.SystemModes.Live_Stage_Life.Status | Should -Be "Inactive"
+        $rows.Count | Should -Be 4
+        $bluetoothRow.TargetState | Should -Be "ANY"
+        $bluetoothRow.IsCompliant | Should -Be $null
+        $wuRow.TargetState | Should -Be "ANY"
+        $wuRow.IsCompliant | Should -Be $null
     }
 
-    It "uses provided PnpCache instead of calling Get-CimInstance" {
-        $workspace = [pscustomobject]@{
-            pnp_devices_enable  = @("USB Audio*")
-            pnp_devices_disable = @("Bluetooth*")
-        }
-        $pnpCache = @(
-            [pscustomobject]@{ Name = "USB Audio Device"; Status = "OK" },
-            [pscustomobject]@{ Name = "Bluetooth Radio"; Status = "Error" }
-        )
-
+    It "defaults all compliance targets to ANY when no active mode is persisted" {
         Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
         Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName Get-CimInstance -MockWith { throw "Get-CimInstance should not be called when cache is provided" }
-        Mock -CommandName powercfg -MockWith { "" }
         Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
+        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 9999  (Power saver)" }
+        Mock -CommandName Get-CimInstance -MockWith { $null }
 
-        $state = Get-WorkspaceState -Workspace $workspace -PnpCache $pnpCache
+        $state = Get-WorkspaceState -Workspace $script:config
 
-        $state | Should -Be "Ready"
-        Assert-MockCalled -CommandName Get-CimInstance -Times 0 -Exactly
+        foreach ($row in @($state.Compliance)) {
+            $row.TargetState | Should -Be "ANY"
+            $row.IsCompliant | Should -Be $null
+        }
+        [string]$state.SystemModes.Live_Stage_Life.Status | Should -Be "Inactive"
+        [string]$state.SystemModes.Eco_Life.Status | Should -Be "Inactive"
     }
 
-    It "ignores # entries and excludes them from state math totals" {
-        $workspace = [pscustomobject]@{
-            services            = @("Audiosrv", "#IgnoredService")
-            executables         = @("C:/Tools/App.exe", "#C:/Tools/Ignored.exe")
-            pnp_devices_enable  = @("USB Audio*", "#Ignored Device")
-            pnp_devices_disable = @("Bluetooth*", "#Ignored Disable Device")
+    It "creates a default state file when one does not exist" {
+        if (Test-Path -Path $script:statePath) {
+            Remove-Item -Path $script:statePath -Force
         }
-        $pnpCache = @(
-            [pscustomobject]@{ Name = "USB Audio Device"; Status = "OK" },
-            [pscustomobject]@{ Name = "Bluetooth Radio"; Status = "Error" }
-        )
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-        Mock -CommandName Get-CimInstance -MockWith { throw "Get-CimInstance should not be called when cache is provided" }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $state = Get-WorkspaceState -Workspace $workspace -PnpCache $pnpCache
-
-        $state | Should -Be "Ready"
-        Assert-MockCalled -CommandName Get-Service -Times 1 -Exactly -ParameterFilter { $Name -eq "Audiosrv" }
-        Assert-MockCalled -CommandName Get-Process -Times 1 -Exactly -ParameterFilter { $Name -eq "App" }
-        Assert-MockCalled -CommandName Get-CimInstance -Times 0 -Exactly
-    }
-
-    It "excludes #Spooler and #*Biometric* from state math and never queries ignored services" {
-        $workspace = [pscustomobject]@{
-            services            = @("Audiosrv", "#Spooler")
-            executables         = @("C:/Tools/App.exe")
-            pnp_devices_disable = @("*Bluetooth*", "#*Biometric*")
-        }
-        $pnpCache = @(
-            [pscustomobject]@{ Name = "Bluetooth Radio"; Status = "Error" }
-        )
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { [pscustomobject]@{ Name = "App" } }
-        Mock -CommandName Get-CimInstance -MockWith { throw "Get-CimInstance should not be called when cache is provided" }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $state = Get-WorkspaceState -Workspace $workspace -PnpCache $pnpCache
-
-        $state | Should -Be "Ready"
-        Assert-MockCalled -CommandName Get-Service -Times 1 -Exactly -ParameterFilter { $Name -eq "Audiosrv" }
-        Assert-MockCalled -CommandName Get-Service -Times 0 -Exactly -ParameterFilter { $Name -eq "Spooler" }
-        Assert-MockCalled -CommandName Get-CimInstance -Times 0 -Exactly
-    }
-
-    It "uses PnpCache for enable-only PnP list without calling Get-CimInstance" {
-        $workspace = [pscustomobject]@{
-            pnp_devices_enable = @("USB Audio*")
-        }
-        $pnpCache = @(
-            [pscustomobject]@{ Name = "USB Audio Device"; Status = "OK" }
-        )
-
         Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
         Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName Get-CimInstance -MockWith { throw "Get-CimInstance should not be called when cache is provided" }
-        Mock -CommandName powercfg -MockWith { "" }
         Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
+        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: 9999  (Power saver)" }
+        Mock -CommandName Get-CimInstance -MockWith { $null }
 
-        $state = Get-WorkspaceState -Workspace $workspace -PnpCache $pnpCache
+        $null = Get-WorkspaceState -Workspace $script:config
 
-        $state | Should -Be "Ready"
-        Assert-MockCalled -CommandName Get-CimInstance -Times 0 -Exactly
+        (Test-Path -Path $script:statePath) | Should -BeTrue
+        $saved = Get-Content -Path $script:statePath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved.PSObject.Properties.Name -contains "Active_System_Mode" | Should -BeTrue
     }
 }

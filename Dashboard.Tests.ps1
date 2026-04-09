@@ -1,511 +1,344 @@
 Set-StrictMode -Version Latest
 
-Describe "Dashboard Commit Engine" {
+Describe "Dashboard Phase 3 Commit Engine" {
     BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
     }
 
-    It "invokes orchestrator only for actionable state transitions" {
+    It "invokes orchestrator only for workload and mode entries with desired delta" {
         $uiStates = @(
-            [pscustomobject]@{
-                Name = "App1"
-                CurrentState = "Stopped"
-                DesiredState = "Ready"
-                Type = "stateful"
-            },
-            [pscustomobject]@{
-                Name = "App2"
-                CurrentState = "Ready"
-                DesiredState = "Stopped"
-                Type = "stateful"
-            },
-            [pscustomobject]@{
-                Name = "App3"
-                CurrentState = "Ready"
-                DesiredState = "Ready"
-                Type = "stateful"
-            },
-            [pscustomobject]@{
-                Name = "Cleanup"
-                CurrentState = "Idle"
-                DesiredState = "Run"
-                Type = "oneshot"
-            }
+            [pscustomobject]@{ Name = "DAW_Cubase"; CurrentState = "Inactive"; DesiredState = "Active"; ProfileType = "App_Workload" },
+            [pscustomobject]@{ Name = "Live_Stage_Life"; CurrentState = "Active"; DesiredState = "Inactive"; ProfileType = "System_Mode" },
+            [pscustomobject]@{ Name = "Eco_Life"; CurrentState = "Mixed"; DesiredState = "Mixed"; ProfileType = "System_Mode" }
         )
 
-        $mockOrchestratorPath = "C:\fake\Orchestrator.ps1"
-
-        Mock -CommandName Start-Sleep -MockWith { }
         Mock -CommandName Invoke-OrchestratorScript -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
 
-        Invoke-WorkspaceCommit -UIStates $uiStates -OrchestratorPath $mockOrchestratorPath
+        Invoke-WorkspaceCommit -UIStates $uiStates -OrchestratorPath "C:/fake/Orchestrator.ps1"
 
-        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 3 -Exactly
+        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 2 -Exactly
         Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
-            $OrchestratorPath -eq $mockOrchestratorPath -and $WorkspaceName -eq "App1" -and $Action -eq "Start"
-        }
-        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
-            $OrchestratorPath -eq $mockOrchestratorPath -and $WorkspaceName -eq "App2" -and $Action -eq "Stop"
+            $WorkspaceName -eq "DAW_Cubase" -and $Action -eq "Start"
         }
         Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
-            $OrchestratorPath -eq $mockOrchestratorPath -and $WorkspaceName -eq "Cleanup" -and $Action -eq "Start"
+            $WorkspaceName -eq "Live_Stage_Life" -and $Action -eq "Stop"
         }
     }
 }
 
-Describe "Get-WorkspaceRootPropertyValue" {
+Describe "Dashboard Phase 3 Desired-State Toggle" {
     BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
     }
 
-    It "returns workspace object by exact name" {
-        $inner = [pscustomobject]@{ x = 1 }
-        $root = [pscustomobject]@{ MyWs = $inner }
-        (Get-WorkspaceRootPropertyValue -Workspaces $root -WorkspaceName "MyWs") | Should -Be $inner
+    It "toggles Active/Inactive for non-mixed current state" {
+        Update-DashboardDesiredStateOnSpace -CurrentState "Inactive" -DesiredState "Inactive" | Should -Be "Active"
+        Update-DashboardDesiredStateOnSpace -CurrentState "Inactive" -DesiredState "Active" | Should -Be "Inactive"
     }
 
-    It "resolves name with OrdinalIgnoreCase fallback" {
-        $inner = [pscustomobject]@{ x = 1 }
-        $root = [pscustomobject]@{ System_Cleanup = $inner }
-        (Get-WorkspaceRootPropertyValue -Workspaces $root -WorkspaceName "system_cleanup") | Should -Be $inner
+    It "toggles only Active/Inactive when current state is Mixed" {
+        Update-DashboardDesiredStateOnSpace -CurrentState "Mixed" -DesiredState "Mixed" | Should -Be "Active"
+        Update-DashboardDesiredStateOnSpace -CurrentState "Mixed" -DesiredState "Active" | Should -Be "Inactive"
     }
 
-    It "returns null when workspace is absent" {
-        $root = [pscustomobject]@{ Other = [pscustomobject]@{} }
-        Get-WorkspaceRootPropertyValue -Workspaces $root -WorkspaceName "Missing" | Should -Be $null
+    It "allows toggling when current and desired are empty" {
+        Update-DashboardDesiredStateOnSpace -CurrentState "" -DesiredState "" | Should -Be "Active"
+        Update-DashboardDesiredStateOnSpace -CurrentState "" -DesiredState "Active" | Should -Be "Inactive"
     }
 
-    It "returns null for blank name" {
-        $root = [pscustomobject]@{ A = 1 }
-        Get-WorkspaceRootPropertyValue -Workspaces $root -WorkspaceName "   " | Should -Be $null
+    It "renders empty state text without throwing" {
+        { Write-StateText -State "" } | Should -Not -Throw
+    }
+
+    It "hides Inactive text in Tab 2 display" {
+        Get-DashboardDisplayState -CurrentTab 2 -State "Inactive" | Should -Be ""
+        Get-DashboardDisplayState -CurrentTab 2 -State "Active" | Should -Be "Active"
+        Get-DashboardDisplayState -CurrentTab 1 -State "Inactive" | Should -Be "Inactive"
     }
 }
 
-Describe "Get-DashboardPostCommitMessages" {
+Describe "Dashboard Phase 3 Post-Commit Messaging" {
     BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
     }
 
-    It "returns post_change and post_start lines for stateful Start commit" {
-        $workspaces = [pscustomobject]@{
-            App1 = [pscustomobject]@{
-                post_change_message = "Verify devices."
-                post_start_message  = "Open mixer."
-            }
-        }
+    It "harvests post-change and action-specific messages from System_Modes path" {
         $uiStates = @(
-            [pscustomobject]@{
-                Name = "App1"
-                Type = "stateful"
-                CurrentState = "Stopped"
-                DesiredState = "Ready"
-            }
+            [pscustomobject]@{ Name = "Live_Stage_Life"; CurrentState = "Inactive"; DesiredState = "Active" }
         )
-
-        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
-
-        $result.Count | Should -Be 2
-        $result[0] | Should -Be "[App1] Verify devices."
-        $result[1] | Should -Be "[App1] Open mixer."
-    }
-
-    It "returns post_change and post_stop lines for stateful Stop commit" {
         $workspaces = [pscustomobject]@{
-            App2 = [pscustomobject]@{
-                post_change_message = "Profile winding down."
-                post_stop_message   = "Save projects."
-            }
-        }
-        $uiStates = @(
-            [pscustomobject]@{
-                Name = "App2"
-                Type = "stateful"
-                CurrentState = "Ready"
-                DesiredState = "Stopped"
-            }
-        )
-
-        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
-
-        $result.Count | Should -Be 2
-        $result[0] | Should -Be "[App2] Profile winding down."
-        $result[1] | Should -Be "[App2] Save projects."
-    }
-
-    It "treats oneshot Run as Start for post_start_message" {
-        $workspaces = [pscustomobject]@{
-            Cleanup = [pscustomobject]@{
-                post_change_message = "Ran cleanup."
-                post_start_message  = "Check logs."
-            }
-        }
-        $uiStates = @(
-            [pscustomobject]@{
-                Name = "Cleanup"
-                Type = "oneshot"
-                CurrentState = "Idle"
-                DesiredState = "Run"
-            }
-        )
-
-        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
-
-        $result.Count | Should -Be 2
-        $result[0] | Should -Be "[Cleanup] Ran cleanup."
-        $result[1] | Should -Be "[Cleanup] Check logs."
-    }
-
-    It "returns nothing when desired Mixed would not invoke orchestrator" {
-        $workspaces = [pscustomobject]@{
-            MixedWs = [pscustomobject]@{
-                post_change_message = "Should not show"
-                post_start_message  = "Should not show"
-                post_stop_message   = "Should not show"
-            }
-        }
-        $uiStates = @(
-            [pscustomobject]@{
-                Name = "MixedWs"
-                Type = "stateful"
-                CurrentState = "Stopped"
-                DesiredState = "Mixed"
-            }
-        )
-
-        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
-
-        $result.Count | Should -Be 0
-    }
-
-    It "preserves UIStates order for multiple workspaces" {
-        $workspaces = [pscustomobject]@{
-            First = [pscustomobject]@{ post_change_message = "A" }
-            Second = [pscustomobject]@{ post_change_message = "B" }
-        }
-        $uiStates = @(
-            [pscustomobject]@{ Name = "First"; Type = "stateful"; CurrentState = "Stopped"; DesiredState = "Ready" },
-            [pscustomobject]@{ Name = "Second"; Type = "stateful"; CurrentState = "Stopped"; DesiredState = "Ready" }
-        )
-
-        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
-
-        $result.Count | Should -Be 2
-        $result[0] | Should -Be "[First] A"
-        $result[1] | Should -Be "[Second] B"
-    }
-}
-
-Describe "Dashboard desired-state keys (Space / Backspace)" {
-    BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
-    }
-
-    It "when current is Mixed, Space toggles only Ready and Stopped" {
-        Update-DashboardDesiredStateOnSpace -Type "stateful" -CurrentState "Mixed" -DesiredState "Mixed" | Should -Be "Ready"
-        Update-DashboardDesiredStateOnSpace -Type "stateful" -CurrentState "Mixed" -DesiredState "Ready" | Should -Be "Stopped"
-        Update-DashboardDesiredStateOnSpace -Type "stateful" -CurrentState "Mixed" -DesiredState "Stopped" | Should -Be "Ready"
-    }
-
-    It "Backspace on Mixed with desired Ready resets to Mixed" {
-        Clear-DashboardDesiredState -Type "stateful" -CurrentState "Mixed" | Should -Be "Mixed"
-    }
-
-    It "Backspace on Ready with desired Stopped resets to Ready" {
-        Clear-DashboardDesiredState -Type "stateful" -CurrentState "Ready" | Should -Be "Ready"
-    }
-
-    It "Backspace on oneshot clears Run to Idle" {
-        Clear-DashboardDesiredState -Type "oneshot" -CurrentState "Idle" | Should -Be "Idle"
-    }
-
-    It "Space on non-Mixed stateful still toggles Ready and Stopped" {
-        Update-DashboardDesiredStateOnSpace -Type "stateful" -CurrentState "Ready" -DesiredState "Ready" | Should -Be "Stopped"
-        Update-DashboardDesiredStateOnSpace -Type "stateful" -CurrentState "Ready" -DesiredState "Stopped" | Should -Be "Ready"
-    }
-}
-
-Describe "Dashboard Editor Helpers" {
-    BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
-    }
-
-    It "builds editor items from actionable array properties" {
-        $workspace = [pscustomobject]@{
-            services            = @("Audiosrv")
-            executables         = @("C:/Tools/App.exe")
-            pnp_devices_disable = @("#*Camera*")
-            tags                = @("Live_Stage")
-        }
-
-        $items = @(New-WorkspaceEditorItems -WorkspaceData $workspace)
-
-        $items.Count | Should -Be 3
-        @($items | Where-Object { $_.Property -eq "services" }).Count | Should -Be 1
-        @($items | Where-Object { $_.Property -eq "executables" }).Count | Should -Be 1
-        @($items | Where-Object { $_.Property -eq "pnp_devices_disable" }).Count | Should -Be 1
-        @($items | Where-Object { $_.Property -eq "tags" }).Count | Should -Be 0
-    }
-
-    It "returns Object[] for a single item so Editor can use .Count under Windows PowerShell 5.1 StrictMode" {
-        $workspace = [pscustomobject]@{
-            scripts_start = @("'C:/x.bat'")
-        }
-        $raw = New-WorkspaceEditorItems -WorkspaceData $workspace
-        $raw.GetType().Name | Should -Be "Object[]"
-        $raw.Count | Should -Be 1
-        $raw[0].Property | Should -Be "scripts_start"
-    }
-
-    It "returns empty Object[] when there are no actionable editor lines" {
-        $workspace = [pscustomobject]@{ tags = @("only_tags") }
-        $raw = New-WorkspaceEditorItems -WorkspaceData $workspace
-        $raw.GetType().Name | Should -Be "Object[]"
-        $raw.Count | Should -Be 0
-    }
-
-    It "toggles ignored marker and mutates RAM + disk for selected item" {
-        $tempPath = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("dashboard-editor-{0}.json" -f ([guid]::NewGuid().ToString("N")))
-        try {
-            $workspaces = [pscustomobject]@{
-                Audio_Production = [pscustomobject]@{
-                    pnp_devices_disable = @("*Camera*")
+            System_Modes = [pscustomobject]@{
+                Live_Stage_Life = [pscustomobject]@{
+                    post_change_message = "Mode switched."
+                    post_start_message = "Live mode engaged."
                 }
             }
-            $selection = [pscustomobject]@{
-                Property = "pnp_devices_disable"
-                Index    = 0
-                Value    = "*Camera*"
+            Hardware_Definitions = [pscustomobject]@{}
+        }
+
+        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
+
+        $result.Count | Should -Be 2
+        $result[0] | Should -Be "[Live_Stage_Life] Mode switched."
+        $result[1] | Should -Be "[Live_Stage_Life] Live mode engaged."
+    }
+
+    It "harvests hardware post-stop message from Hardware_Definitions path" {
+        $uiStates = @(
+            [pscustomobject]@{ Name = "GPU_Scheduling_HAGS"; CurrentState = "Active"; DesiredState = "Inactive" }
+        )
+        $workspaces = [pscustomobject]@{
+            System_Modes = [pscustomobject]@{}
+            Hardware_Definitions = [pscustomobject]@{
+                GPU_Scheduling_HAGS = [pscustomobject]@{
+                    post_change_message = "HAGS changed."
+                    post_stop_message = "Restart required."
+                }
             }
+        }
 
-            Set-WorkspaceEditorSelectionIgnored -Workspaces $workspaces -WorkspaceName "Audio_Production" -EditorSelection $selection -WorkspacePath $tempPath
-            $workspaces.Audio_Production.pnp_devices_disable[0] | Should -Be "#*Camera*"
-            $selection.Value | Should -Be "#*Camera*"
+        $result = @(Get-DashboardPostCommitMessages -UIStates $uiStates -Workspaces $workspaces)
 
-            Set-WorkspaceEditorSelectionIgnored -Workspaces $workspaces -WorkspaceName "Audio_Production" -EditorSelection $selection -WorkspacePath $tempPath
-            $workspaces.Audio_Production.pnp_devices_disable[0] | Should -Be "*Camera*"
-            $selection.Value | Should -Be "*Camera*"
+        $result.Count | Should -Be 2
+        $result[0] | Should -Be "[GPU_Scheduling_HAGS] HAGS changed."
+        $result[1] | Should -Be "[GPU_Scheduling_HAGS] Restart required."
+    }
+}
 
-            $saved = Get-Content -Path $tempPath -Raw | ConvertFrom-Json
-            @($saved.Audio_Production.pnp_devices_disable).Count | Should -Be 1
-        } finally {
-            if (Test-Path -Path $tempPath) {
-                Remove-Item -Path $tempPath -Force
+Describe "Dashboard Tab 3 Manual Override Console" {
+    BeforeAll {
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+    }
+
+    It "toggles ON and OFF desired state for manual hardware override rows" {
+        Update-DashboardHardwareDesiredStateOnSpace -DesiredState "ON" | Should -Be "OFF"
+        Update-DashboardHardwareDesiredStateOnSpace -DesiredState "OFF" | Should -Be "ON"
+        Update-DashboardHardwareDesiredStateOnSpace -DesiredState "ANY" | Should -Be "ON"
+    }
+
+    It "marks pending manual override rows with pending color and state" {
+        $pending = [pscustomobject]@{
+            Component     = "Bluetooth_Radio"
+            PhysicalState = "OFF"
+            DesiredState  = "ON"
+            TargetState   = "ANY"
+            IsCompliant   = $null
+        }
+        $queue = @{ "Bluetooth_Radio" = "ON" }
+
+        $presentation = Get-DashboardTab3RowPresentation -Row $pending -IsSelected $true -PendingHardwareChanges $queue
+        $presentation.Status | Should -Be "[QUEUED: ON]"
+        $presentation.Color | Should -Be "Yellow"
+        $presentation.Prefix | Should -Be " > "
+    }
+
+    It "commits hardware override rows through Hardware_Override profile type" {
+        $uiStates = @(
+            [pscustomobject]@{ Name = "Bluetooth_Radio"; CurrentState = "OFF"; DesiredState = "ON"; ProfileType = "Hardware_Override" },
+            [pscustomobject]@{ Name = "Windows_Update"; CurrentState = "ON"; DesiredState = "OFF"; ProfileType = "Hardware_Override" }
+        )
+
+        Mock -CommandName Invoke-OrchestratorScript -MockWith { }
+        Mock -CommandName Start-Sleep -MockWith { }
+
+        Invoke-WorkspaceCommit -UIStates $uiStates -OrchestratorPath "C:/fake/Orchestrator.ps1"
+
+        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
+            $WorkspaceName -eq "Bluetooth_Radio" -and $Action -eq "Start" -and $ProfileType -eq "Hardware_Override"
+        }
+        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
+            $WorkspaceName -eq "Windows_Update" -and $Action -eq "Stop" -and $ProfileType -eq "Hardware_Override"
+        }
+    }
+
+    It "persists active system mode intent to state json" {
+        $statePath = Join-Path -Path $TestDrive -ChildPath "state.json"
+        $modeStates = @(
+            [pscustomobject]@{ Name = "Live_Stage_Life"; CurrentState = "Mixed"; DesiredState = "Active"; ProfileType = "System_Mode" },
+            [pscustomobject]@{ Name = "Eco_Life"; CurrentState = "Active"; DesiredState = "Inactive"; ProfileType = "System_Mode" }
+        )
+
+        Save-DashboardStateMemory -ModeStates $modeStates -StateFilePath $statePath
+        $saved = Get-Content -Path $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved.Active_System_Mode | Should -Be "Live_Stage_Life"
+    }
+
+    It "bootstraps state json when missing" {
+        $statePath = Join-Path -Path $TestDrive -ChildPath "state.json"
+        Ensure-DashboardStateMemoryFile -StateFilePath $statePath
+        (Test-Path -Path $statePath) | Should -BeTrue
+        $saved = Get-Content -Path $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved.PSObject.Properties.Name -contains "Active_System_Mode" | Should -BeTrue
+    }
+}
+
+Describe "Dashboard Tab 2/3 Queue Workflow" {
+    BeforeAll {
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+    }
+
+    It "queues ideal targets for compliance violations only" {
+        $queue = @{}
+        $complianceData = @(
+            [pscustomobject]@{ Component = "Windows_Update"; IsCompliant = $false; TargetState = "OFF" },
+            [pscustomobject]@{ Component = "Bluetooth_Radio"; IsCompliant = $false; TargetState = "ANY" },
+            [pscustomobject]@{ Component = "GPU_Scheduling_HAGS"; IsCompliant = $true; TargetState = "OFF" }
+        )
+
+        Add-DashboardIdealHardwareToQueue -ComplianceData $complianceData -PendingHardwareChanges $queue
+
+        $queue.Keys.Count | Should -Be 1
+        $queue["Windows_Update"] | Should -Be "OFF"
+    }
+
+    It "toggles queue entry state between ON and OFF" {
+        $queue = @{ "Windows_Update" = "OFF" }
+        Toggle-DashboardQueueOverride -Component "Windows_Update" -PendingHardwareChanges $queue
+        $queue["Windows_Update"] | Should -Be "ON"
+        Toggle-DashboardQueueOverride -Component "Windows_Update" -PendingHardwareChanges $queue
+        $queue["Windows_Update"] | Should -Be "OFF"
+    }
+
+    It "clears queue entry for selected component" {
+        $queue = @{ "Windows_Update" = "ON" }
+        Clear-DashboardQueueOverride -Component "Windows_Update" -PendingHardwareChanges $queue
+        $queue.ContainsKey("Windows_Update") | Should -BeFalse
+    }
+
+    It "shows queued row with queued status and yellow color" {
+        $row = [pscustomobject]@{
+            Component     = "Windows_Update"
+            PhysicalState = "ON"
+            DesiredState  = "OFF"
+            TargetState   = "OFF"
+            IsCompliant   = $false
+        }
+        $queue = @{ "Windows_Update" = "OFF" }
+
+        $presentation = Get-DashboardTab3RowPresentation -Row $row -IsSelected $true -PendingHardwareChanges $queue
+
+        $presentation.Color | Should -Be "Yellow"
+        $presentation.Status | Should -Be "[QUEUED: OFF]"
+        $presentation.Desired | Should -Be "OFF"
+        $presentation.Prefix | Should -Be " > "
+    }
+
+    It "shows blueprint target in Desired for non-queued violation rows" {
+        $row = [pscustomobject]@{
+            Component     = "Ethernet_Port"
+            PhysicalState = "ON"
+            DesiredState  = "ON"
+            TargetState   = "OFF"
+            IsCompliant   = $false
+        }
+        $queue = @{}
+
+        $presentation = Get-DashboardTab3RowPresentation -Row $row -IsSelected $false -PendingHardwareChanges $queue
+
+        $presentation.Desired | Should -Be "OFF"
+        $presentation.Status | Should -Be "[VIOLATION]"
+        $presentation.Color | Should -Be "Red"
+    }
+
+    It "normalizes ANY targets to empty Desired by default" {
+        $rows = @(
+            [pscustomobject]@{
+                Component     = "Display_Refresh_Rate"
+                PhysicalState = $null
+                DesiredState  = "ON"
+                TargetState   = "ANY"
+                IsCompliant   = $null
             }
-        }
+        )
+        $queue = @{}
+
+        Normalize-DashboardComplianceRows -ComplianceRows $rows -PendingHardwareChanges $queue
+
+        $rows[0].DesiredState | Should -Be ""
     }
 
-    It "filters or shows ignored details based on showIgnored toggle" {
-        $workspace = [pscustomobject]@{
-            services = @("Audiosrv", "#IgnoredService")
+    It "uses compact symbols for compliant and ignored rows" {
+        $matchRow = [pscustomobject]@{
+            Component     = "Windows_Update"
+            PhysicalState = "OFF"
+            DesiredState  = "OFF"
+            TargetState   = "OFF"
+            IsCompliant   = $true
         }
+        $ignoredRow = [pscustomobject]@{
+            Component     = "Display_Refresh_Rate"
+            PhysicalState = $null
+            DesiredState  = ""
+            TargetState   = "ANY"
+            IsCompliant   = $null
+        }
+        $queue = @{}
 
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Running" } }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
+        $matchView = Get-DashboardTab3RowPresentation -Row $matchRow -IsSelected $false -PendingHardwareChanges $queue
+        $ignoredView = Get-DashboardTab3RowPresentation -Row $ignoredRow -IsSelected $false -PendingHardwareChanges $queue
 
-        $hidden = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $shown = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$true -ShowStopHooks:$false)
+        $matchView.Status | Should -Be "✓"
+        $ignoredView.Status | Should -Be "-"
+    }
 
-        @($hidden | Where-Object { $_.Name -match "IgnoredService" }).Count | Should -Be 0
-        @($shown | Where-Object { $_.Name -eq "[Ignored] IgnoredService" -and $_.IsRunning -eq $false }).Count | Should -Be 1
+    It "renders tab-specific footer action text" {
+        Get-DashboardFooterText -CurrentTab 1 | Should -Match '\[Space\] Toggle Workload \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 2 | Should -Match '\[Space\] Set Blueprint \| \[A\] Queue Ideal States \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 3 | Should -Match '\[Space\] Toggle Override \| \[Bksp\] Clear Queue \| \[Enter\] Commit'
+    }
+
+    It "sets active blueprint immediately and updates mode rows" {
+        $statePath = Join-Path -Path $TestDrive -ChildPath "state.json"
+        $modeStates = @(
+            [pscustomobject]@{ Name = "Live_Stage_Life"; CurrentState = "Active"; DesiredState = "Active"; ProfileType = "System_Mode" },
+            [pscustomobject]@{ Name = "Eco_Life"; CurrentState = "Inactive"; DesiredState = "Inactive"; ProfileType = "System_Mode" }
+        )
+
+        Set-DashboardActiveBlueprint -ModeStates $modeStates -SelectedModeName "Eco_Life" -StateFilePath $statePath
+
+        $saved = Get-Content -Path $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved.Active_System_Mode | Should -Be "Eco_Life"
+        @($modeStates | Where-Object { $_.CurrentState -eq "Active" }).Count | Should -Be 1
+        @($modeStates | Where-Object { $_.DesiredState -eq "Active" }).Count | Should -Be 1
+        (@($modeStates | Where-Object { $_.Name -eq "Eco_Life" })[0].CurrentState) | Should -Be "Active"
     }
 }
 
-Describe "Get-WorkspaceDetails executables" {
+Describe "Dashboard Commit Scope Rules" {
     BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
     }
 
-    It "includes non-running executables in F1 details with IsRunning false" {
-        $workspace = [pscustomobject]@{
-            executables = @("C:/NotRunning.exe")
-        }
+    It "builds commit states from workload deltas and queued hardware only" {
+        $workloads = @(
+            [pscustomobject]@{ Name = "DAW_Cubase"; CurrentState = "Inactive"; DesiredState = "Active"; ProfileType = "App_Workload" }
+        )
+        $modes = @(
+            [pscustomobject]@{ Name = "Eco_Life"; CurrentState = "Inactive"; DesiredState = "Active"; ProfileType = "System_Mode" }
+        )
+        $queue = @{ "Windows_Update" = "OFF" }
 
-        Mock -CommandName Get-Process -MockWith { $null }
+        $pending = Get-DashboardPendingCommitStates -WorkloadStates $workloads -PendingHardwareChanges $queue
 
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $exeRows = @($details | Where-Object { $_.Type -eq "[Exe]" })
-        $exeRows.Count | Should -Be 1
-        $exeRows[0].Name | Should -Be "NotRunning.exe"
-        $exeRows[0].IsRunning | Should -Be $false
+        $pending.Count | Should -Be 2
+        (@($pending | Where-Object { $_.ProfileType -eq "System_Mode" })).Count | Should -Be 0
+        (@($pending | Where-Object { $_.Name -eq "DAW_Cubase" -and $_.Action -eq "Start" })).Count | Should -Be 1
+        (@($pending | Where-Object { $_.Name -eq "Windows_Update" -and $_.DesiredState -eq "OFF" -and $_.ProfileType -eq "Hardware_Override" })).Count | Should -Be 1
     }
 
-    It "derives executable name from quoted path when arguments follow" {
-        $workspace = [pscustomobject]@{
-            executables = @("'C:/Apps/My Tool.exe' --hidden")
-        }
+    It "clears pending hardware queue after commit helper runs" {
+        $queue = @{ "Windows_Update" = "OFF" }
+        Mock -CommandName Invoke-WorkspaceCommit -MockWith { }
 
-        Mock -CommandName Get-Process -MockWith { $null }
+        Invoke-DashboardCommit -PendingStates @() -PendingHardwareChanges $queue -OrchestratorPath "C:/fake/Orchestrator.ps1"
 
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $exeRows = @($details | Where-Object { $_.Type -eq "[Exe]" })
-        $exeRows.Count | Should -Be 1
-        $exeRows[0].Name | Should -Be "My Tool.exe"
-        $exeRows[0].IsRunning | Should -Be $false
-    }
-}
-
-Describe "Get-WorkspaceDetails scripts_start and power_plan_start" {
-    BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
-    }
-
-    It "lists scripts_start as stateless [Scr] rows with basename only" {
-        $workspace = [pscustomobject]@{
-            scripts_start = @("'./CustomScripts/Monitors 60hz.lnk'")
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $scrRows = @($details | Where-Object { $_.Type -eq "[Scr]" })
-        $scrRows.Count | Should -Be 1
-        $scrRows[0].Name | Should -Be "Monitors 60hz"
-        $scrRows[0].IsRunning | Should -Be $null
-    }
-
-    It "skips commented and timer tokens in scripts_start" {
-        $workspace = [pscustomobject]@{
-            scripts_start = @("#'C:/Ignored.bat'", "t 3000", "'C:/Real.ps1'")
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $scrRows = @($details | Where-Object { $_.Type -eq "[Scr]" })
-        $scrRows.Count | Should -Be 1
-        $scrRows[0].Name | Should -Be "Real"
-    }
-
-    It "includes power_plan_start with monitored IsRunning from powercfg" {
-        $workspace = [pscustomobject]@{
-            power_plan_start = "Max Performance"
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "Power Scheme GUID: x  (Max Performance)" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $pwrRows = @($details | Where-Object { $_.Type -eq "[Pwr]" })
-        $pwrRows.Count | Should -Be 1
-        $pwrRows[0].Name | Should -Be "Max Performance"
-        $pwrRows[0].IsRunning | Should -Be $true
-    }
-
-    It "lists services_disable as [Off] with IsRunning true when service is not Running" {
-        $workspace = [pscustomobject]@{
-            services_disable = @("WSearch")
-        }
-
-        Mock -CommandName Get-Service -MockWith { [pscustomobject]@{ Status = "Stopped" } }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        $offRows = @($details | Where-Object { $_.Type -eq "[Off]" })
-        $offRows.Count | Should -Be 1
-        $offRows[0].Name | Should -Be "WSearch"
-        $offRows[0].IsRunning | Should -Be $true
-    }
-
-    It "lists scripts_stop as [ScrStop] with stateless IsRunning" {
-        $workspace = [pscustomobject]@{
-            scripts_stop = @("'C:/Tools/Cleanup.bat'")
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$true)
-        $rows = @($details | Where-Object { $_.Type -eq "[ScrStop]" })
-        $rows.Count | Should -Be 1
-        $rows[0].Name | Should -Be "Cleanup"
-        $rows[0].IsRunning | Should -Be $null
-    }
-
-    It "lists power_plan_stop as [PwrStop] stateless" {
-        $workspace = [pscustomobject]@{
-            power_plan_stop = "Balanced"
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$true)
-        $rows = @($details | Where-Object { $_.Type -eq "[PwrStop]" })
-        $rows.Count | Should -Be 1
-        $rows[0].Name | Should -Be "Balanced"
-        $rows[0].IsRunning | Should -Be $null
-    }
-
-    It "omits [ScrStop] and [PwrStop] when ShowStopHooks is false" {
-        $workspace = [pscustomobject]@{
-            scripts_stop     = @("'C:/Tools/Cleanup.bat'")
-            power_plan_stop  = "Balanced"
-        }
-
-        Mock -CommandName Get-Service -MockWith { $null }
-        Mock -CommandName Get-Process -MockWith { $null }
-        Mock -CommandName powercfg -MockWith { "" }
-        Mock -CommandName Get-ItemPropertyValue -MockWith { $null }
-
-        $details = @(Get-WorkspaceDetails -WorkspaceData $workspace -PnpCache @() -ShowIgnored:$false -ShowStopHooks:$false)
-        @($details | Where-Object { $_.Type -eq "[ScrStop]" -or $_.Type -eq "[PwrStop]" }).Count | Should -Be 0
-    }
-}
-
-Describe "Get-UIStatesFromWorkspaces description" {
-    BeforeAll {
-        $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $here -ChildPath "Dashboard.ps1")
-        # Mandatory [array] PnpCache rejects @(); use a stub entry (workspaces under test have no PnP patterns).
-        $script:PnpCacheStub = @([pscustomobject]@{ Name = "__PesterPnpStub__"; Status = "OK" })
-    }
-
-    It "maps workspace description to Description on UI state" {
-        $workspaces = [pscustomobject]@{
-            ProfileA = [pscustomobject]@{ description = "Primary DAW profile for recording." }
-        }
-        $states = @(Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $script:PnpCacheStub -ShowIgnored:$false -ShowStopHooks:$false)
-        $states.Count | Should -Be 1
-        $states[0].Name | Should -Be "ProfileA"
-        $states[0].Description | Should -Be "Primary DAW profile for recording."
-    }
-
-    It "uses empty string when description property is absent" {
-        $workspaces = [pscustomobject]@{
-            ProfileB = [pscustomobject]@{ type = "stateful" }
-        }
-        $states = @(Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $script:PnpCacheStub -ShowIgnored:$false -ShowStopHooks:$false)
-        $states[0].Description | Should -Be ""
-    }
-
-    It "preserves whitespace-only description for UI layer to treat as empty" {
-        $workspaces = [pscustomobject]@{
-            ProfileC = [pscustomobject]@{ description = "   " }
-        }
-        $states = @(Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $script:PnpCacheStub -ShowIgnored:$false -ShowStopHooks:$false)
-        $states[0].Description | Should -Be "   "
+        $queue.Keys.Count | Should -Be 0
     }
 }

@@ -32,6 +32,103 @@ function Resolve-RepoRelativeFilePath {
     return $Path
 }
 
+function Get-RunningStatusFromCounts {
+    param(
+        [Parameter(Mandatory = $true)][int]$Matched,
+        [Parameter(Mandatory = $true)][int]$Total
+    )
+
+    if ($Total -eq 0) { return "Inactive" }
+    if ($Matched -eq 0) { return "Inactive" }
+    if ($Matched -eq $Total) { return "Active" }
+    return "Mixed"
+}
+
+function Get-ExecutableIsRunning {
+    param([Parameter(Mandatory = $true)][string]$ExecutionToken)
+
+    if ([string]::IsNullOrWhiteSpace($ExecutionToken)) {
+        return $false
+    }
+    if ($ExecutionToken -match '^#' -or $ExecutionToken -match '^t\s+(\d+)$') {
+        return $false
+    }
+
+    $resolvedToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken $ExecutionToken
+    $filePath = $resolvedToken
+    if ($resolvedToken -match "^'(.*?)'\s*(.*)$") {
+        $filePath = $matches[1]
+    }
+
+    $filePath = Resolve-RepoRelativeFilePath -Path $filePath
+    $leafName = Split-Path -Path $filePath -Leaf
+    $cleanName = $leafName -replace "\.exe$", ""
+
+    if ([string]::IsNullOrWhiteSpace($cleanName)) {
+        return $false
+    }
+
+    $process = Get-Process -Name $cleanName -ErrorAction SilentlyContinue
+    return ($null -ne $process)
+}
+
+function Get-HardwarePhysicalState {
+    param(
+        [Parameter(Mandatory = $true)][string]$DefinitionKey,
+        [Parameter(Mandatory = $true)][psobject]$Definition,
+        [array]$PnpCache = $null
+    )
+
+    $type = [string]$Definition.type
+    switch ($type) {
+        "service" {
+            $name = [string]$Definition.name
+            if ([string]::IsNullOrWhiteSpace($name)) { return $null }
+            $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($null -eq $svc) { return $null }
+            if ($svc.Status -eq "Running") { return "ON" }
+            return "OFF"
+        }
+        "pnp_device" {
+            $patterns = @($Definition.match)
+            if ($patterns.Count -eq 0) { return $null }
+            $matchedDevices = @()
+
+            foreach ($pattern in $patterns) {
+                $devName = [string]$pattern
+                if ([string]::IsNullOrWhiteSpace($devName)) { continue }
+                if ($null -ne $PnpCache) {
+                    $matchedDevices += @($PnpCache | Where-Object { $_.Name -like $devName })
+                } else {
+                    $cimName = $devName -replace '\*', '%'
+                    $matchedDevices += @(Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '$cimName'" -ErrorAction SilentlyContinue)
+                }
+            }
+
+            if (@($matchedDevices).Count -eq 0) { return $null }
+            $okMatches = @($matchedDevices | Where-Object { $_.Status -eq "OK" })
+            if ($okMatches.Count -gt 0) { return "ON" }
+            return "OFF"
+        }
+        "registry" {
+            $path = [string]$Definition.path
+            $name = [string]$Definition.name
+            if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($name)) { return $null }
+            $val = Get-ItemPropertyValue -Path $path -Name $name -ErrorAction SilentlyContinue
+            if ($null -eq $val) { return $null }
+            if ($Definition.PSObject.Properties["value_on"] -and $val -eq $Definition.value_on) { return "ON" }
+            if ($Definition.PSObject.Properties["value_off"] -and $val -eq $Definition.value_off) { return "OFF" }
+            return $null
+        }
+        "stateless" {
+            return $null
+        }
+        default {
+            return $null
+        }
+    }
+}
+
 function Get-WorkspaceState {
     [CmdletBinding()]
     param(
@@ -40,209 +137,118 @@ function Get-WorkspaceState {
         [array]$PnpCache = $null
     )
 
-    $typeProperty = $Workspace.PSObject.Properties["type"]
-    if ($null -ne $typeProperty -and [string]$typeProperty.Value -eq "oneshot") {
-        return "Idle"
+    $hardwareDefinitions = $Workspace.Hardware_Definitions
+    $systemModes = $Workspace.System_Modes
+    $appWorkloads = $Workspace.App_Workloads
+    $activeSystemMode = $null
+    $statePath = Join-Path -Path $PSScriptRoot -ChildPath "state.json"
+    if (-not (Test-Path -Path $statePath -PathType Leaf)) {
+        ([pscustomobject]@{ Active_System_Mode = $null } | ConvertTo-Json -Depth 3) | Set-Content -Path $statePath -Encoding utf8
     }
-
-    # Count only actionable/runtime state: services, services_disable, executables, PnP, power plan, registry — not scripts_* or protected_processes.
-    $totalServices = 0
-    $runningServices = 0
-    $totalSvcDisable = 0
-    $runningSvcDisable = 0
-    $totalExecutables = 0
-    $runningExecutables = 0
-
-    $servicesProperty = $Workspace.PSObject.Properties["services"]
-    if ($null -ne $servicesProperty) {
-        foreach ($serviceItem in @($servicesProperty.Value)) {
-            $serviceName = [string]$serviceItem
-            if ([string]::IsNullOrWhiteSpace($serviceName)) {
-                continue
+    if (Test-Path -Path $statePath -PathType Leaf) {
+        try {
+            $persistedState = Get-Content -Path $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+            if ($null -ne $persistedState -and -not [string]::IsNullOrWhiteSpace([string]$persistedState.Active_System_Mode)) {
+                $activeSystemMode = [string]$persistedState.Active_System_Mode
             }
-            if ($serviceName -match '^#') {
-                continue
-            }
-            if ($serviceName -match '^t\s+(\d+)$') {
-                continue
-            }
-
-            $isOptional = $serviceName.StartsWith("?")
-            if ($isOptional) {
-                $serviceName = $serviceName.Substring(1)
-            }
-
-            $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -ne $service -and $service.Status -eq "Running") {
-                $totalServices++
-                $runningServices++
-            } elseif (-not $isOptional) {
-                $totalServices++
-            }
+        } catch {
+            $activeSystemMode = $null
         }
     }
 
-    $servicesDisableProperty = $Workspace.PSObject.Properties["services_disable"]
-    if ($null -ne $servicesDisableProperty) {
-        foreach ($serviceItem in @($servicesDisableProperty.Value)) {
-            $serviceName = [string]$serviceItem
-            if ([string]::IsNullOrWhiteSpace($serviceName)) {
-                continue
-            }
-            if ($serviceName -match '^#') {
-                continue
-            }
-            if ($serviceName -match '^t\s+(\d+)$') {
-                continue
-            }
+    $appWorkloadResults = @{}
+    foreach ($workloadProp in $appWorkloads.PSObject.Properties) {
+        $workloadName = $workloadProp.Name
+        $workload = $workloadProp.Value
+        $totalChecks = 0
+        $matchedChecks = 0
 
-            $isOptional = $serviceName.StartsWith("?")
-            if ($isOptional) {
-                $serviceName = $serviceName.Substring(1)
+        foreach ($serviceName in @($workload.services)) {
+            $name = [string]$serviceName
+            if ([string]::IsNullOrWhiteSpace($name) -or $name -match '^#' -or $name -match '^t\s+(\d+)$') { continue }
+            $totalChecks++
+            $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($null -ne $svc -and $svc.Status -eq "Running") {
+                $matchedChecks++
             }
+        }
 
-            $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -eq $service) {
-                if ($isOptional) {
-                    continue
-                }
-                $totalSvcDisable++
-                continue
+        foreach ($executionToken in @($workload.executables)) {
+            $token = [string]$executionToken
+            if ([string]::IsNullOrWhiteSpace($token) -or $token -match '^#' -or $token -match '^t\s+(\d+)$') { continue }
+            $totalChecks++
+            if (Get-ExecutableIsRunning -ExecutionToken $token) {
+                $matchedChecks++
             }
+        }
 
-            if ($null -ne $service -and $service.Status -ne "Running") {
-                $totalSvcDisable++
-                $runningSvcDisable++
-            } elseif (-not $isOptional) {
-                $totalSvcDisable++
-            }
+        $appWorkloadResults[$workloadName] = [pscustomobject]@{
+            Status       = Get-RunningStatusFromCounts -Matched $matchedChecks -Total $totalChecks
+            MatchedChecks = $matchedChecks
+            TotalChecks  = $totalChecks
         }
     }
 
-    $executablesProperty = $Workspace.PSObject.Properties["executables"]
-    if ($null -ne $executablesProperty) {
-        foreach ($executableItem in @($executablesProperty.Value)) {
-            $executionToken = [string]$executableItem
-            if ([string]::IsNullOrWhiteSpace($executionToken)) {
-                continue
-            }
-            if ($executionToken -match '^#') {
-                continue
-            }
-            if ($executionToken -match '^t\s+(\d+)$') {
-                continue
-            }
+    $activePowerPlan = [string](powercfg /getactivescheme)
+    $systemModeResults = @{}
+    foreach ($modeProp in $systemModes.PSObject.Properties) {
+        $modeName = $modeProp.Name
+        $mode = $modeProp.Value
+        $isActiveMode = ($modeName -eq $activeSystemMode)
 
-            $resolvedToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken $executionToken
-            $filePath = $resolvedToken
-            if ($resolvedToken -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-            }
+        $powerPlanTarget = [string]$mode.power_plan
+        $powerPlanMatches = $false
+        if (-not [string]::IsNullOrWhiteSpace($powerPlanTarget)) {
+            $powerPlanMatches = $activePowerPlan -match [regex]::Escape($powerPlanTarget)
+        }
 
-            $isOptional = $filePath.StartsWith("?")
-            if ($isOptional) {
-                $filePath = $filePath.Substring(1)
-            }
-
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-
-            $leafName = Split-Path -Path $filePath -Leaf
-            $cleanName = $leafName -replace "\.exe$", ""
-
-            $process = Get-Process -Name $cleanName -ErrorAction SilentlyContinue
-            if ($null -ne $process) {
-                $totalExecutables++
-                $runningExecutables++
-            } elseif (-not $isOptional) {
-                $totalExecutables++
-            }
+        $systemModeResults[$modeName] = [pscustomobject]@{
+            Status          = if ($isActiveMode) { "Active" } else { "Inactive" }
+            MatchedTargets  = 0
+            TrackedTargets  = 0
+            PowerPlanTarget = $powerPlanTarget
+            PowerPlanMatch  = $powerPlanMatches
         }
     }
 
-    $totalItems = $totalServices + $totalSvcDisable + $totalExecutables
-    $runningItems = $runningServices + $runningSvcDisable + $runningExecutables
-
-    $pnpEnableProperty = $Workspace.PSObject.Properties["pnp_devices_enable"]
-    if ($null -ne $pnpEnableProperty) {
-        foreach ($friendlyName in @($pnpEnableProperty.Value)) {
-            $devName = [string]$friendlyName
-            if ([string]::IsNullOrWhiteSpace($devName)) { continue }
-            if ($devName -match '^#') { continue }
-            $totalItems++
-            if ($null -ne $PnpCache) {
-                $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
-            } else {
-                $cimName = $devName -replace '\*', '%'
-                $dev = Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '$cimName'" -ErrorAction SilentlyContinue | Select-Object -First 1
-            }
-            if ($null -ne $dev -and $dev.Status -eq "OK") {
-                $runningItems++
-            }
+    $compliance = @()
+    $activeModeTargets = $null
+    if (-not [string]::IsNullOrWhiteSpace($activeSystemMode) -and
+        $null -ne $systemModes -and
+        $null -ne $systemModes.PSObject.Properties[$activeSystemMode]) {
+        $activeModeData = $systemModes.PSObject.Properties[$activeSystemMode].Value
+        if ($null -ne $activeModeData.PSObject.Properties["targets"]) {
+            $activeModeTargets = $activeModeData.targets
         }
     }
 
-    $pnpDisableProperty = $Workspace.PSObject.Properties["pnp_devices_disable"]
-    if ($null -ne $pnpDisableProperty) {
-        foreach ($friendlyName in @($pnpDisableProperty.Value)) {
-            $devName = [string]$friendlyName
-            if ([string]::IsNullOrWhiteSpace($devName)) { continue }
-            if ($devName -match '^#') { continue }
-            $totalItems++
-            if ($null -ne $PnpCache) {
-                $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
-            } else {
-                $cimName = $devName -replace '\*', '%'
-                $dev = Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '$cimName'" -ErrorAction SilentlyContinue | Select-Object -First 1
-            }
-            if ($null -eq $dev -or $dev.Status -ne "OK") {
-                $runningItems++
-            }
+    foreach ($hardwareProp in $hardwareDefinitions.PSObject.Properties) {
+        $componentKey = $hardwareProp.Name
+        $definition = $hardwareProp.Value
+        $physicalState = Get-HardwarePhysicalState -DefinitionKey $componentKey -Definition $definition -PnpCache $PnpCache
+        $targetState = "ANY"
+        if ($null -ne $activeModeTargets -and $null -ne $activeModeTargets.PSObject.Properties[$componentKey]) {
+            $targetState = [string]$activeModeTargets.PSObject.Properties[$componentKey].Value
+        }
+
+        $isCompliant = $null
+        if ($targetState -ne "ANY") {
+            $isCompliant = ($physicalState -eq $targetState)
+        }
+
+        $compliance += [pscustomobject]@{
+            Mode          = $activeSystemMode
+            Component     = $componentKey
+            PhysicalState = $physicalState
+            TargetState   = $targetState
+            DesiredState  = $physicalState
+            IsCompliant   = $isCompliant
         }
     }
 
-    $powerPlanProperty = $Workspace.PSObject.Properties["power_plan_start"]
-    if ($null -ne $powerPlanProperty -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanProperty.Value)) {
-        $planName = [string]$powerPlanProperty.Value
-        $totalItems++
-        $active = powercfg /getactivescheme
-        if ($active -match [regex]::Escape($planName)) {
-            $runningItems++
-        }
+    return [pscustomobject]@{
+        AppWorkloads = [pscustomobject]$appWorkloadResults
+        SystemModes  = [pscustomobject]$systemModeResults
+        Compliance   = @($compliance)
     }
-
-    $registryTogglesProperty = $Workspace.PSObject.Properties["registry_toggles"]
-    if ($null -ne $registryTogglesProperty) {
-        foreach ($item in @($registryTogglesProperty.Value)) {
-            if ($null -eq $item) { continue }
-            $pathProp = $item.PSObject.Properties["path"]
-            $nameProp = $item.PSObject.Properties["name"]
-            $valueStartProp = $item.PSObject.Properties["value_start"]
-            if ($null -eq $pathProp -or $null -eq $nameProp -or $null -eq $valueStartProp) { continue }
-
-            $path = [string]$pathProp.Value
-            $name = [string]$nameProp.Value
-            $expectedValue = $valueStartProp.Value
-            if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($name)) { continue }
-
-            $totalItems++
-            $val = Get-ItemPropertyValue -Path $path -Name $name -ErrorAction SilentlyContinue
-            if ($val -eq $expectedValue) {
-                $runningItems++
-            }
-        }
-    }
-
-    if ($totalItems -eq 0) {
-        return "Stopped"
-    }
-
-    if ($runningItems -eq 0) {
-        return "Stopped"
-    }
-
-    if ($runningItems -eq $totalItems) {
-        return "Ready"
-    }
-
-    return "Mixed"
 }

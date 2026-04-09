@@ -5,73 +5,162 @@
     "shortcut_prefix_start": "!Start-",
     "shortcut_prefix_stop": "!Stop-"
   },
-  "GPU_Scheduling_HAGS": {
-    "create_shortcut_for": "none",
-    "tags": ["Live_Stage"],
-    "description": "Disables GPU scheduling to eliminate video-induced DPC latency.",
-    "post_start_message": "[CRITICAL] HAGS is disabled. RESTART your PC now and set BIOS MUX to dGPU (PEG).",
-    "post_stop_message": "[CRITICAL] HAGS is enabled. RESTART your PC and set BIOS MUX to dGPU (SG).",
-    "registry_toggles": [
-      {
-        "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
-        "name": "HwSchMode",
-        "type": "DWord",
-        "value_start": 1,
-        "value_stop": 2
+  "Hardware_Definitions": {
+    "GPU_Scheduling_HAGS": {
+      "type": "registry",
+      "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+      "name": "HwSchMode",
+      "value_on": 2,
+      "value_off": 1,
+      "post_change_message": "[CRITICAL] HAGS state altered. RESTART your PC to apply hybrid graphics changes."
+    },
+    "Windows_Update": {
+      "type": "service",
+      "name": "wuauserv",
+      "action_override_on": [
+        "'./CustomScripts/WUB-Enable Updates.lnk'"
+      ],
+      "action_override_off": [
+        "'./CustomScripts/WUB-Disable Updates.lnk'"
+      ]
+    },
+    "Search_Indexer": {
+      "type": "service",
+      "name": "WSearch"
+    },
+    "SMB_Server_Service": {
+      "type": "service",
+      "name": "LanmanServer"
+    },
+    "SMB_Workstation_Service": {
+      "type": "service",
+      "name": "LanmanWorkstation"
+    },
+    "Wi_Fi_Adapter": {
+      "type": "pnp_device",
+      "match": [
+        "*Wi-Fi*",
+        "*Wireless*"
+      ]
+    },
+    "Ethernet_Port": {
+      "type": "pnp_device",
+      "match": [
+        "*2.5GbE*"
+      ]
+    },
+    "Bluetooth_Radio": {
+      "type": "pnp_device",
+      "match": [
+        "*Bluetooth*"
+      ]
+    },
+    "Battery_ACPI": {
+      "type": "pnp_device",
+      "match": [
+        "*ACPI*"
+      ]
+    },
+    "Unnecessary_Peripherals": {
+      "type": "pnp_device",
+      "match": [
+        "*Camera*",
+        "*Webcam*",
+        "*Biometric*",
+        "*Windows Hello*"
+      ]
+    },
+    "Display_Refresh_Rate": {
+      "type": "stateless",
+      "action_override_on": [
+        "'./CustomScripts/Monitors 90hz.lnk'"
+      ],
+      "action_override_off": [
+        "'./CustomScripts/Monitors 60hz.lnk'"
+      ]
+    }
+  },
+  "System_Modes": {
+    "Normal_Life": {
+      "description": "Default desktop behavior.",
+      "power_plan": "Balanced",
+      "targets": {
+        "GPU_Scheduling_HAGS": "ON",
+        "Windows_Update": "ON",
+        "Search_Indexer": "ON",
+        "SMB_Server_Service": "ON",
+        "SMB_Workstation_Service": "ON",
+        "Wi_Fi_Adapter": "ON",
+        "Ethernet_Port": "ON",
+        "Bluetooth_Radio": "ON",
+        "Battery_ACPI": "ON",
+        "Unnecessary_Peripherals": "ON",
+        "Display_Refresh_Rate": "ON"
       }
-    ]
+    },
+    "Live_Stage_Life": {
+      "description": "Real-time audio mode with minimized background noise.",
+      "power_plan": "Max Performance",
+      "post_change_message": "Live Stage mode engaged.",
+      "targets": {
+        "GPU_Scheduling_HAGS": "OFF",
+        "Windows_Update": "OFF",
+        "Search_Indexer": "OFF",
+        "SMB_Server_Service": "OFF",
+        "SMB_Workstation_Service": "OFF",
+        "Wi_Fi_Adapter": "OFF",
+        "Ethernet_Port": "OFF",
+        "Bluetooth_Radio": "OFF",
+        "Battery_ACPI": "OFF",
+        "Unnecessary_Peripherals": "OFF",
+        "Display_Refresh_Rate": "OFF"
+      }
+    },
+    "Eco_Life": {
+      "description": "Battery-conscious mobile profile.",
+      "power_plan": "Power saver",
+      "targets": {
+        "GPU_Scheduling_HAGS": "ANY",
+        "Windows_Update": "OFF",
+        "Search_Indexer": "OFF",
+        "SMB_Server_Service": "OFF",
+        "SMB_Workstation_Service": "OFF",
+        "Wi_Fi_Adapter": "ANY",
+        "Ethernet_Port": "OFF",
+        "Bluetooth_Radio": "ANY",
+        "Battery_ACPI": "ANY",
+        "Unnecessary_Peripherals": "OFF",
+        "Display_Refresh_Rate": "ANY"
+      }
+    }
   },
-  "System_Power_and_Display": {
-    "tags": ["Live_Stage"],
-    "description": "Forces Max Performance plan, 60Hz refresh rate, and 80% static fan speed (GFBC: Fan speed not implemented, waiting for PR).",
-    "power_plan_start": "Max Performance",
-    "power_plan_stop": "Balanced",
-    "scripts_start": [
-      "'./CustomScripts/Monitors 60hz.lnk'"
-    ],
-    "scripts_stop": [
-      "'./CustomScripts/Monitors 90hz.lnk'"
-    ]
-  },
-  "Windows_Update_and_Search_Indexer": {
-    "tags": ["Live_Stage"],
-    "description": "Halts Windows Update and Search Indexer to prevent CPU/Disk spikes.",
-    "services_disable": ["wuauserv", "WSearch"],
-    "scripts_start": [
-      "'./CustomScripts/WUB-Disable Updates.lnk'"
-    ],
-    "scripts_stop": [
-      "'./CustomScripts/WUB-Enable Updates.lnk'"
-    ]
-  },
-  "Network_WiFi": {
-    "tags": ["Live_Stage"],
-    "description": "Kills wireless networking. Usually causes a lot of DPC latency.",
-    "pnp_devices_disable": ["*Wi-Fi*", "*Wireless*"]
-  },
-  "Network_Ethernet": {
-    "tags": ["Live_Stage"],
-    "description": "Kills wired networking.",
-    "pnp_devices_disable": ["*2.5GbE*"]
-  },
-  "Bluetooth_Radio": {
-    "tags": ["Live_Stage"],
-    "description": "Kills Bluetooth polling.",
-    "pnp_devices_disable": ["*Bluetooth*"]
-  },
-  "Battery": {
-    "tags": ["Live_Stage"],
-    "description": "Kills battery polling.",
-    "pnp_devices_disable": ["*ACPI*"]
-  },
-  "Unnecessary_Peripherals": {
-    "tags": ["Live_Stage"],
-    "description": "Kills Camera, Biometrics, and SD Card readers.",
-    "pnp_devices_disable": [
-      "*Camera*",
-      "*Webcam*",
-      "*Biometric*",
-      "*Windows Hello*"
-    ]
+  "App_Workloads": {
+    "DAW_Cubase": {
+      "description": "Digital Audio Workstation runtime.",
+      "services": [
+        "Audiosrv"
+      ],
+      "executables": [
+        "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe'"
+      ]
+    },
+    "Office": {
+      "description": "Microsoft Office and OneDrive workload.",
+      "services": [
+        "ClickToRunSvc"
+      ],
+      "executables": [
+        "'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"
+      ]
+    },
+    "StarDesk": {
+      "description": "StarDesk service and desktop app workload.",
+      "services": [
+        "StarDeskService"
+      ],
+      "executables": [
+        "'C:/Program Files/StarDesk/StarDesk.exe'"
+      ]
+    }
   }
 }

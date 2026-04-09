@@ -5,7 +5,10 @@ param(
 
     [Parameter(Mandatory = $true)]
     [ValidateSet("Start", "Stop")]
-    [string]$Action
+    [string]$Action,
+
+    [ValidateSet("App_Workload", "System_Mode", "Hardware_Override")]
+    [string]$ProfileType
 )
 
 Set-StrictMode -Version Latest
@@ -44,13 +47,11 @@ if (-not (Get-Command -Name Show-Notification -CommandType Function -ErrorAction
 }
 
 $dbPath = Join-Path -Path $PSScriptRoot -ChildPath "workspaces.json"
-
 if (-not (Test-Path -Path $dbPath -PathType Leaf)) {
     throw "Fatal: workspaces.json not found."
 }
 
 $script:OrchestratorRepoRoot = [System.IO.Path]::GetDirectoryName($dbPath)
-
 try {
     $workspaces = Get-Content -Path $dbPath -Raw -Encoding utf8 | ConvertFrom-Json
 } catch {
@@ -64,62 +65,6 @@ if ($null -ne $configProperty) {
     $notificationsProperty = $configProperty.Value.PSObject.Properties["notifications"]
     if ($null -ne $notificationsProperty -and $notificationsProperty.Value -eq $true) {
         $showNotifications = $true
-    }
-}
-
-$workspaceProperty = $workspaces.PSObject.Properties[$WorkspaceName]
-if ($null -eq $workspaceProperty) {
-    throw "Fatal: Workspace '$WorkspaceName' not defined in workspaces.json."
-}
-
-$workspace = $workspaceProperty.Value
-
-$protectedProcessesProperty = $workspace.PSObject.Properties["protected_processes"]
-if ($null -ne $protectedProcessesProperty) {
-    $workspace.protected_processes = @(
-        foreach ($processName in $protectedProcessesProperty.Value) {
-            if ($processName -is [string]) {
-                $processName -replace "\.exe$", ""
-            } else {
-                $processName
-            }
-        }
-    )
-}
-
-# Phase 2: Pre-Flight Safety Checks
-if ($Action -eq "Stop") {
-    $protectedProcesses = @()
-    $protectedProcessesProperty = $workspace.PSObject.Properties["protected_processes"]
-    if ($null -ne $protectedProcessesProperty) {
-        $protectedProcesses = @($protectedProcessesProperty.Value)
-    }
-
-    $activeProtected = @()
-    if ($protectedProcesses.Count -gt 0) {
-        foreach ($processName in $protectedProcesses) {
-            if ([string]$processName -match '^#') {
-                continue
-            }
-            $proc = Get-Process -Name $processName -ErrorAction SilentlyContinue
-            if ($null -ne $proc) {
-                $activeProtected += $processName
-            }
-        }
-    }
-
-    if ($activeProtected.Count -gt 0) {
-        Write-Host ""
-        Write-Host "Warning: Protected Executables running..." -ForegroundColor Red
-        foreach ($p in $activeProtected) {
-            Write-Host "  - $($p).exe" -ForegroundColor Red
-        }
-        Write-Host "You might lose data if we force kill." -ForegroundColor Yellow
-        $ans = Read-Host "Force kill anyway? (Y/N)"
-
-        if ($ans -match "^[Nn]$") {
-            throw "Abort: User cancelled teardown due to active protected process."
-        }
     }
 }
 
@@ -161,6 +106,7 @@ function Start-ShortcutOrUrlShellExecute {
         [string]$Arguments,
         [switch]$Wait
     )
+
     $full = [System.IO.Path]::GetFullPath($ItemPath)
     $dir = [System.IO.Path]::GetDirectoryName($full)
     if ([string]::IsNullOrWhiteSpace($dir)) {
@@ -169,7 +115,7 @@ function Start-ShortcutOrUrlShellExecute {
             $dir = $PSScriptRoot
         }
     }
-    # Start-Process -FilePath treats () as wildcards. Use ShellExecute via ProcessStartInfo (works on PS 5.1+ and avoids Pester mocks that omit -LiteralPath).
+
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $full
     $psi.WorkingDirectory = $dir
@@ -183,511 +129,258 @@ function Start-ShortcutOrUrlShellExecute {
     }
 }
 
-# Phase 3: The Start Pipeline
-if ($Action -eq "Start") {
-    $servicesProperty = $workspace.PSObject.Properties["services"]
-    if ($null -ne $servicesProperty) {
-        foreach ($serviceItem in $servicesProperty.Value) {
-            if ([string]$serviceItem -match '^#') {
-                continue
-            }
-            if ($serviceItem -is [string] -and $serviceItem -match "^t\s+(\d+)$") {
-                $sleepDuration = [int]$matches[1]
-                Start-Sleep -Milliseconds $sleepDuration
-                continue
-            }
+function Invoke-ExecutionToken {
+    param(
+        [Parameter(Mandatory)][string]$ExecutionToken,
+        [switch]$Wait
+    )
 
-            $serviceName = [string]$serviceItem
-            $isOptionalService = $serviceName.StartsWith("?")
-            if ($isOptionalService) {
-                $serviceName = $serviceName.Substring(1)
-            }
-
-            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -eq $svcCheck) {
-                if ($isOptionalService) {
-                    Write-Host "Skipping optional service: $serviceName" -ForegroundColor DarkYellow
-                    continue
-                }
-                Write-Host "Warning: Service '$serviceName' does not exist on this system." -ForegroundColor Yellow
-                $ans = Read-Host "Ignore missing service and continue? (Y/N)"
-                if ($ans -match "^[Nn]$") {
-                    throw "Abort: Required service $serviceName is missing."
-                }
-                continue
-            }
-
-            Write-Host "Starting service: $serviceName..." -ForegroundColor Cyan
-            gsudo sc.exe config $serviceName start= demand 2>&1 | Out-Null
-            gsudo net.exe start $serviceName 2>&1 | Out-Null
-
-            $pollStart = Get-Date
-            while ($true) {
-                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-                if ($null -ne $service -and $service.Status -eq "Running") {
-                    break
-                }
-
-                $elapsedMs = ((Get-Date) - $pollStart).TotalMilliseconds
-                if ($elapsedMs -ge 15000) {
-                    Write-Warning "Timeout waiting for service [$serviceName] to reach Running state."
-                    break
-                }
-
-                Start-Sleep -Milliseconds 500
-            }
-        }
+    $token = Resolve-QuotedRelativeExecutionToken -ExecutionToken $ExecutionToken
+    $filePath = $token
+    $argumentList = ""
+    if ($token -match "^'(.*?)'\s*(.*)$") {
+        $filePath = $matches[1]
+        $argumentList = $matches[2]
     }
 
-    $servicesDisableProperty = $workspace.PSObject.Properties["services_disable"]
-    if ($null -ne $servicesDisableProperty) {
-        foreach ($serviceItem in $servicesDisableProperty.Value) {
-            if ([string]$serviceItem -match '^#') {
-                continue
-            }
-            if ($serviceItem -is [string] -and $serviceItem -match "^t\s+(\d+)$") {
-                $sleepDuration = [int]$matches[1]
-                Start-Sleep -Milliseconds $sleepDuration
-                continue
-            }
+    $filePath = Resolve-RepoRelativeFilePath -Path $filePath
+    $filePath = [System.IO.Path]::GetFullPath($filePath)
+    $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
 
-            $serviceName = [string]$serviceItem
-            $isOptionalSvcDisable = $serviceName.StartsWith("?")
-            if ($isOptionalSvcDisable) {
-                $serviceName = $serviceName.Substring(1)
-            }
-
-            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -eq $svcCheck) {
-                if ($isOptionalSvcDisable) {
-                    Write-Host "Skipping optional services_disable entry: $serviceName" -ForegroundColor DarkYellow
-                    continue
-                }
-                Write-Host "Warning: Service '$serviceName' does not exist on this system." -ForegroundColor Yellow
-                $ans = Read-Host "Ignore missing service and continue? (Y/N)"
-                if ($ans -match "^[Nn]$") {
-                    throw "Abort: Required services_disable target $serviceName is missing."
-                }
-                continue
-            }
-
-            Write-Host "Stopping and disabling service: $serviceName..." -ForegroundColor Cyan
-            gsudo net.exe stop $serviceName /y 2>&1 | Out-Null
-            gsudo sc.exe config $serviceName start= disabled 2>&1 | Out-Null
+    if ($filePath -match '\.ps1$') {
+        $pwshArg = "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$filePath`""
+        if (-not [string]::IsNullOrWhiteSpace($argumentList)) {
+            $pwshArg = "$pwshArg $argumentList"
         }
+
+        if ($Wait) {
+            Start-Process -FilePath "pwsh.exe" -ArgumentList $pwshArg -Wait -NoNewWindow 2>&1 | Out-Null
+        } else {
+            Start-Process -FilePath "pwsh.exe" -ArgumentList $pwshArg 2>&1 | Out-Null
+        }
+        return
     }
 
-    # scripts_start (runs synchronously, after services, before executables)
-    $scriptsStartProperty = $workspace.PSObject.Properties["scripts_start"]
-    if ($null -ne $scriptsStartProperty) {
-        foreach ($scriptItem in $scriptsStartProperty.Value) {
-            if ([string]$scriptItem -match '^#') {
-                continue
-            }
-            if ($scriptItem -is [string] -and $scriptItem -match "^t\s+(\d+)$") {
-                $sleepDuration = [int]$matches[1]
-                Start-Sleep -Milliseconds $sleepDuration
-                continue
-            }
+    if ($ext -eq ".lnk" -or $ext -eq ".url") {
+        if ([string]::IsNullOrWhiteSpace($argumentList)) {
+            Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Wait:$Wait
+        } else {
+            Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Arguments $argumentList -Wait:$Wait
+        }
+        return
+    }
 
-            $executionToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken ([string]$scriptItem)
+    if ($Wait) {
+        if ([string]::IsNullOrWhiteSpace($argumentList)) {
+            Start-Process -FilePath $filePath -Wait -NoNewWindow 2>&1 | Out-Null
+        } else {
+            Start-Process -FilePath $filePath -ArgumentList $argumentList -Wait -NoNewWindow 2>&1 | Out-Null
+        }
+    } else {
+        if ([string]::IsNullOrWhiteSpace($argumentList)) {
+            Start-Process -FilePath $filePath 2>&1 | Out-Null
+        } else {
+            Start-Process -FilePath $filePath -ArgumentList $argumentList 2>&1 | Out-Null
+        }
+    }
+}
+
+function Set-PowerPlanByName {
+    param([Parameter(Mandatory)][string]$PlanName)
+
+    $plansOutput = powercfg /l
+    foreach ($line in @($plansOutput)) {
+        if ($line -match [regex]::Escape($PlanName)) {
+            $guidMatch = [regex]::Match([string]$line, "([0-9a-fA-F-]{36})")
+            if ($guidMatch.Success) {
+                powercfg /setactive $guidMatch.Groups[1].Value | Out-Null
+            }
+            break
+        }
+    }
+}
+
+function Invoke-HardwareDefinitionTransition {
+    param(
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [Parameter(Mandatory = $true)][psobject]$Definition,
+        [Parameter(Mandatory = $true)][string]$DesiredState
+    )
+
+    $overrideEntries = $null
+    if ($DesiredState -eq "ON" -and $null -ne $Definition.PSObject.Properties["action_override_on"]) {
+        $overrideEntries = @($Definition.action_override_on)
+    } elseif ($DesiredState -eq "OFF" -and $null -ne $Definition.PSObject.Properties["action_override_off"]) {
+        $overrideEntries = @($Definition.action_override_off)
+    }
+
+    if ($null -ne $overrideEntries -and $overrideEntries.Count -gt 0) {
+        foreach ($entry in $overrideEntries) {
+            if ([string]::IsNullOrWhiteSpace([string]$entry)) { continue }
+            Invoke-ExecutionToken -ExecutionToken ([string]$entry -replace "^'+|'+$", "") -Wait
+        }
+        return
+    }
+
+    switch ([string]$Definition.type) {
+        "pnp_device" {
+            foreach ($matchPattern in @($Definition.match)) {
+                if ([string]::IsNullOrWhiteSpace([string]$matchPattern)) { continue }
+                $verb = if ($DesiredState -eq "ON") { "Enable-PnpDevice" } else { "Disable-PnpDevice" }
+                $psCmd = 'Get-PnpDevice -FriendlyName "{0}" -ErrorAction SilentlyContinue | {1} -Confirm:$false -ErrorAction SilentlyContinue' -f ([string]$matchPattern), $verb
+                $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCmd))
+                gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
+            }
+        }
+        "service" {
+            $serviceName = [string]$Definition.name
+            if ([string]::IsNullOrWhiteSpace($serviceName)) { break }
+            if ($DesiredState -eq "ON") {
+                gsudo Start-Service -Name $serviceName 2>&1 | Out-Null
+            } else {
+                gsudo Stop-Service -Name $serviceName -Force 2>&1 | Out-Null
+            }
+        }
+        "registry" {
+            $valueToSet = if ($DesiredState -eq "ON") { $Definition.value_on } else { $Definition.value_off }
+            $path = [string]$Definition.path
+            $name = [string]$Definition.name
+            if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($name)) { break }
+            $propertyType = "DWord"
+            if ($null -ne $Definition.PSObject.Properties["value_type"] -and -not [string]::IsNullOrWhiteSpace([string]$Definition.value_type)) {
+                $propertyType = [string]$Definition.value_type
+            }
+            gsudo New-ItemProperty -Path $path -Name $name -Value $valueToSet -PropertyType $propertyType -Force 2>&1 | Out-Null
+        }
+        "stateless" {
+            # No native command path for stateless targets.
+        }
+    }
+}
+
+# Phase 1 routing: resolve profile type and data
+$resolvedProfileType = $null
+$resolvedProfileData = $null
+$systemModesProperty = $workspaces.PSObject.Properties["System_Modes"]
+$appWorkloadsProperty = $workspaces.PSObject.Properties["App_Workloads"]
+$hardwareDefsProperty = $workspaces.PSObject.Properties["Hardware_Definitions"]
+
+if (-not [string]::IsNullOrWhiteSpace($ProfileType)) {
+    if ($ProfileType -eq "Hardware_Override") {
+        if ($null -eq $hardwareDefsProperty -or $null -eq $hardwareDefsProperty.Value.PSObject.Properties[$WorkspaceName]) {
+            throw "Fatal: Hardware override component '$WorkspaceName' not defined in workspaces.json."
+        }
+        $resolvedProfileType = "Hardware_Override"
+        $resolvedProfileData = $hardwareDefsProperty.Value.PSObject.Properties[$WorkspaceName].Value
+    } elseif ($ProfileType -eq "System_Mode") {
+        if ($null -eq $systemModesProperty -or $null -eq $systemModesProperty.Value.PSObject.Properties[$WorkspaceName]) {
+            throw "Fatal: Workspace '$WorkspaceName' not defined under System_Modes in workspaces.json."
+        }
+        $resolvedProfileType = "System_Mode"
+        $resolvedProfileData = $systemModesProperty.Value.PSObject.Properties[$WorkspaceName].Value
+    } elseif ($ProfileType -eq "App_Workload") {
+        if ($null -eq $appWorkloadsProperty -or $null -eq $appWorkloadsProperty.Value.PSObject.Properties[$WorkspaceName]) {
+            throw "Fatal: Workspace '$WorkspaceName' not defined under App_Workloads in workspaces.json."
+        }
+        $resolvedProfileType = "App_Workload"
+        $resolvedProfileData = $appWorkloadsProperty.Value.PSObject.Properties[$WorkspaceName].Value
+    }
+} elseif ($null -ne $systemModesProperty -and $null -ne $systemModesProperty.Value.PSObject.Properties[$WorkspaceName]) {
+    $resolvedProfileType = "System_Mode"
+    $resolvedProfileData = $systemModesProperty.Value.PSObject.Properties[$WorkspaceName].Value
+} elseif ($null -ne $appWorkloadsProperty -and $null -ne $appWorkloadsProperty.Value.PSObject.Properties[$WorkspaceName]) {
+    $resolvedProfileType = "App_Workload"
+    $resolvedProfileData = $appWorkloadsProperty.Value.PSObject.Properties[$WorkspaceName].Value
+} else {
+    throw "Fatal: Workspace '$WorkspaceName' not defined in workspaces.json."
+}
+
+# Phase 3/4 execution
+if ($resolvedProfileType -eq "App_Workload") {
+    if ($Action -eq "Start") {
+        foreach ($serviceName in @($resolvedProfileData.services)) {
+            if ([string]::IsNullOrWhiteSpace([string]$serviceName)) { continue }
+            gsudo Start-Service -Name ([string]$serviceName) 2>&1 | Out-Null
+        }
+        foreach ($executionToken in @($resolvedProfileData.executables)) {
+            if ([string]::IsNullOrWhiteSpace([string]$executionToken)) { continue }
+            Invoke-ExecutionToken -ExecutionToken ([string]$executionToken)
+        }
+
+        if ($showNotifications) {
+            Show-Notification -Title "Workspace Ready" -Message "$WorkspaceName is now active."
+        }
+    } else {
+        $executables = @($resolvedProfileData.executables)
+        for ($i = $executables.Count - 1; $i -ge 0; $i--) {
+            $executionToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken ([string]$executables[$i])
             $filePath = $executionToken
-            $argumentList = ""
-
             if ($executionToken -match "^'(.*?)'\s*(.*)$") {
                 $filePath = $matches[1]
-                $argumentList = $matches[2]
             }
-
-            $isOptionalScript = $filePath.StartsWith("?")
-            if ($isOptionalScript) {
-                $filePath = $filePath.Substring(1)
-            }
-
             $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                if ($isOptionalScript) {
-                    Write-Host "Skipping optional script: $filePath" -ForegroundColor DarkYellow
-                    continue
-                }
-                Write-Host "Warning: Script not found: $filePath" -ForegroundColor Yellow
-                $ans = Read-Host "Ignore missing script and continue? (Y/N)"
-                if ($ans -match "^[Nn]$") {
-                    throw "Abort: Required script is missing: $filePath"
-                }
-                continue
-            }
-
-            $filePath = [System.IO.Path]::GetFullPath($filePath)
-
-            if ($filePath -match '\.ps1$') {
-                $pwshArg = "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$filePath`""
-                if (-not [string]::IsNullOrWhiteSpace($argumentList)) {
-                    $pwshArg = "$pwshArg $argumentList"
-                }
-
-                Start-Process -FilePath "pwsh.exe" -ArgumentList $pwshArg -Wait -NoNewWindow 2>&1 | Out-Null
-            } else {
-                $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
-                $launchShortcutInOwnWindow = ($ext -eq '.lnk' -or $ext -eq '.url')
-                if ($launchShortcutInOwnWindow) {
-                    if ([string]::IsNullOrWhiteSpace($argumentList)) {
-                        Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Wait
-                    } else {
-                        Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Arguments $argumentList -Wait
-                    }
-                } elseif ([string]::IsNullOrWhiteSpace($argumentList)) {
-                    Start-Process -FilePath $filePath -Wait -NoNewWindow 2>&1 | Out-Null
-                } else {
-                    Start-Process -FilePath $filePath -ArgumentList $argumentList -Wait -NoNewWindow 2>&1 | Out-Null
-                }
+            $exeName = Split-Path -Path $filePath -Leaf
+            if (-not [string]::IsNullOrWhiteSpace($exeName)) {
+                gsudo taskkill /F /IM $exeName /T 2>&1 | Out-Null
             }
         }
-    }
+        foreach ($serviceName in @($resolvedProfileData.services)) {
+            if ([string]::IsNullOrWhiteSpace([string]$serviceName)) { continue }
+            gsudo Stop-Service -Name ([string]$serviceName) -Force 2>&1 | Out-Null
+        }
 
-    $pnpEnableProperty = $workspace.PSObject.Properties["pnp_devices_enable"]
-    if ($null -ne $pnpEnableProperty) {
-        foreach ($devName in @($pnpEnableProperty.Value)) {
-            if ([string]::IsNullOrWhiteSpace([string]$devName)) { continue }
-            if ([string]$devName -match '^#') { continue }
-            $psCmd = 'Get-PnpDevice -FriendlyName "{0}" -ErrorAction SilentlyContinue | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue' -f $devName
-            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCmd))
-            gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
+        if ($showNotifications) {
+            Show-Notification -Title "Workspace Stopped" -Message "$WorkspaceName has been cleanly terminated."
         }
     }
-
-    $pnpDisableProperty = $workspace.PSObject.Properties["pnp_devices_disable"]
-    if ($null -ne $pnpDisableProperty) {
-        foreach ($devName in @($pnpDisableProperty.Value)) {
-            if ([string]::IsNullOrWhiteSpace([string]$devName)) { continue }
-            if ([string]$devName -match '^#') { continue }
-            $psCmd = 'Get-PnpDevice -FriendlyName "{0}" -ErrorAction SilentlyContinue | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue' -f $devName
-            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCmd))
-            gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
-        }
+} elseif ($resolvedProfileType -eq "System_Mode") {
+    $powerPlanProp = $resolvedProfileData.PSObject.Properties["power_plan"]
+    if ($Action -eq "Start" -and $null -ne $powerPlanProp -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanProp.Value)) {
+        Set-PowerPlanByName -PlanName ([string]$powerPlanProp.Value)
     }
 
-    $powerPlanProperty = $workspace.PSObject.Properties["power_plan_start"]
-    if ($null -ne $powerPlanProperty -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanProperty.Value)) {
-        $planName = [string]$powerPlanProperty.Value
-        $plansOutput = powercfg /l
-        foreach ($line in @($plansOutput)) {
-            if ($line -match [regex]::Escape($planName)) {
-                $guidMatch = [regex]::Match([string]$line, "([0-9a-fA-F-]{36})")
-                if (-not $guidMatch.Success) {
-                    continue
-                }
-                $planGuid = $guidMatch.Groups[1].Value
-                powercfg /setactive $planGuid | Out-Null
-                break
-            }
+    foreach ($target in $resolvedProfileData.targets.PSObject.Properties) {
+        $componentName = $target.Name
+        $targetState = [string]$target.Value
+        if ($targetState -eq "ANY") {
+            continue
         }
+
+        $desiredState = $targetState
+        if ($Action -eq "Stop") {
+            $desiredState = if ($targetState -eq "ON") { "OFF" } else { "ON" }
+        }
+
+        $hardwareDefs = $workspaces.PSObject.Properties["Hardware_Definitions"]
+        if ($null -eq $hardwareDefs -or $null -eq $hardwareDefs.Value.PSObject.Properties[$componentName]) {
+            continue
+        }
+        $def = $hardwareDefs.Value.PSObject.Properties[$componentName].Value
+        Invoke-HardwareDefinitionTransition -ComponentName $componentName -Definition $def -DesiredState $desiredState
     }
 
-    $registryTogglesProperty = $workspace.PSObject.Properties["registry_toggles"]
-    if ($null -ne $registryTogglesProperty) {
-        foreach ($item in @($registryTogglesProperty.Value)) {
-            if ($null -eq $item) { continue }
-            $pathProp = $item.PSObject.Properties["path"]
-            $nameProp = $item.PSObject.Properties["name"]
-            $valueStartProp = $item.PSObject.Properties["value_start"]
-            $typeProp = $item.PSObject.Properties["type"]
-            if ($null -eq $pathProp -or $null -eq $nameProp -or $null -eq $valueStartProp -or $null -eq $typeProp) { continue }
-            gsudo New-ItemProperty -Path $pathProp.Value -Name $nameProp.Value -Value $valueStartProp.Value -PropertyType $typeProp.Value -Force 2>&1 | Out-Null
-        }
-    }
-
-    $executablesProperty = $workspace.PSObject.Properties["executables"]
-    if ($null -ne $executablesProperty) {
-        foreach ($executableItem in $executablesProperty.Value) {
-            if ([string]$executableItem -match '^#') {
-                continue
-            }
-            if ($executableItem -is [string] -and $executableItem -match "^t\s+(\d+)$") {
-                $sleepDuration = [int]$matches[1]
-                Start-Sleep -Milliseconds $sleepDuration
-                continue
-            }
-
-            $executionToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken ([string]$executableItem)
-            $filePath = $executionToken
-            $argumentList = ""
-
-            if ($executionToken -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-                $argumentList = $matches[2]
-            }
-
-            $isOptionalExecutable = $filePath.StartsWith("?")
-            if ($isOptionalExecutable) {
-                $filePath = $filePath.Substring(1)
-            }
-
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-
-            if ($isOptionalExecutable -and -not (Test-Path -LiteralPath $filePath)) {
-                Write-Host "Skipping optional executable: $filePath" -ForegroundColor DarkYellow
-                continue
-            }
-
-            $filePath = [System.IO.Path]::GetFullPath($filePath)
-            $exeExt = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
-            if ($exeExt -eq '.lnk' -or $exeExt -eq '.url') {
-                if ([string]::IsNullOrWhiteSpace($argumentList)) {
-                    Start-ShortcutOrUrlShellExecute -ItemPath $filePath
-                } else {
-                    Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Arguments $argumentList
-                }
-            } elseif ([string]::IsNullOrWhiteSpace($argumentList)) {
-                Start-Process -FilePath $filePath
-            } else {
-                Start-Process -FilePath $filePath -ArgumentList $argumentList
-            }
-        }
-    }
-
-    if ($showNotifications) {
+    if ($Action -eq "Start" -and $showNotifications) {
         Show-Notification -Title "Workspace Ready" -Message "$WorkspaceName is now active."
     }
-}
-
-# Phase 4: The Stop Pipeline
-if ($Action -eq "Stop") {
-    # scripts_stop (runs synchronously; scripts are executed before any teardown)
-    $scriptsStopProperty = $workspace.PSObject.Properties["scripts_stop"]
-    if ($null -ne $scriptsStopProperty) {
-        foreach ($scriptItem in $scriptsStopProperty.Value) {
-            if ([string]$scriptItem -match '^#') {
-                continue
-            }
-            if ($scriptItem -is [string] -and $scriptItem -match "^t\s+(\d+)$") {
-                continue
-            }
-
-            $executionToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken ([string]$scriptItem)
-            $filePath = $executionToken
-            $argumentList = ""
-
-            if ($executionToken -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-                $argumentList = $matches[2]
-            }
-
-            $isOptionalScript = $filePath.StartsWith("?")
-            if ($isOptionalScript) {
-                $filePath = $filePath.Substring(1)
-            }
-
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                if ($isOptionalScript) {
-                    Write-Host "Skipping optional script: $filePath" -ForegroundColor DarkYellow
-                    continue
-                }
-                Write-Host "Warning: Script not found: $filePath" -ForegroundColor Yellow
-                $ans = Read-Host "Ignore missing script and continue? (Y/N)"
-                if ($ans -match "^[Nn]$") {
-                    throw "Abort: Required script is missing: $filePath"
-                }
-                continue
-            }
-
-            $filePath = [System.IO.Path]::GetFullPath($filePath)
-
-            if ($filePath -match '\.ps1$') {
-                $pwshArg = "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$filePath`""
-                if (-not [string]::IsNullOrWhiteSpace($argumentList)) {
-                    $pwshArg = "$pwshArg $argumentList"
-                }
-
-                Start-Process -FilePath "pwsh.exe" -ArgumentList $pwshArg -Wait -NoNewWindow 2>&1 | Out-Null
-            } else {
-                $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
-                $launchShortcutInOwnWindow = ($ext -eq '.lnk' -or $ext -eq '.url')
-                if ($launchShortcutInOwnWindow) {
-                    if ([string]::IsNullOrWhiteSpace($argumentList)) {
-                        Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Wait
-                    } else {
-                        Start-ShortcutOrUrlShellExecute -ItemPath $filePath -Arguments $argumentList -Wait
-                    }
-                } elseif ([string]::IsNullOrWhiteSpace($argumentList)) {
-                    Start-Process -FilePath $filePath -Wait -NoNewWindow 2>&1 | Out-Null
-                } else {
-                    Start-Process -FilePath $filePath -ArgumentList $argumentList -Wait -NoNewWindow 2>&1 | Out-Null
-                }
-            }
-        }
-    }
-
-    $servicesDisableProperty = $workspace.PSObject.Properties["services_disable"]
-    if ($null -ne $servicesDisableProperty) {
-        foreach ($serviceItem in @($servicesDisableProperty.Value)) {
-            if ([string]$serviceItem -match '^#') {
-                continue
-            }
-            if ($serviceItem -is [string] -and $serviceItem -match "^t\s+(\d+)$") {
-                continue
-            }
-
-            $serviceName = [string]$serviceItem
-            if ($serviceName.StartsWith("?")) {
-                $serviceName = $serviceName.Substring(1)
-            }
-
-            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -eq $svcCheck) {
-                continue
-            }
-
-            Write-Host "Restoring service: $serviceName..." -ForegroundColor Cyan
-            gsudo sc.exe config $serviceName start= demand 2>&1 | Out-Null
-            gsudo net.exe start $serviceName 2>&1 | Out-Null
-        }
-    }
-
-    $powerPlanStopProp = $workspace.PSObject.Properties["power_plan_stop"]
-    if ($null -ne $powerPlanStopProp -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanStopProp.Value)) {
-        $stopPlanName = [string]$powerPlanStopProp.Value
-        $plansOutputStop = powercfg /l
-        foreach ($line in @($plansOutputStop)) {
-            if ($line -match [regex]::Escape($stopPlanName)) {
-                $guidMatchStop = [regex]::Match([string]$line, "([0-9a-fA-F-]{36})")
-                if (-not $guidMatchStop.Success) {
-                    continue
-                }
-                $planGuidStop = $guidMatchStop.Groups[1].Value
-                powercfg /setactive $planGuidStop | Out-Null
-                break
-            }
-        }
-    }
-
-    $executablesProperty = $workspace.PSObject.Properties["executables"]
-    if ($null -ne $executablesProperty) {
-        $executables = @($executablesProperty.Value)
-        for ($i = $executables.Count - 1; $i -ge 0; $i--) {
-            $executableItem = $executables[$i]
-            if ([string]$executableItem -match '^#') {
-                continue
-            }
-
-            if ($executableItem -is [string] -and $executableItem -match "^t\s+(\d+)$") {
-                continue
-            }
-
-            $executionToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken ([string]$executableItem)
-            $filePath = $executionToken
-            if ($executionToken -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-            }
-            if ($filePath.StartsWith("?")) {
-                $filePath = $filePath.Substring(1)
-            }
-
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-
-            $exeName = Split-Path -Path $filePath -Leaf
-            gsudo taskkill /F /IM $exeName /T 2>&1 | Out-Null
-            Start-Sleep -Seconds 1
-        }
-    }
-
-    $pnpEnableProperty = $workspace.PSObject.Properties["pnp_devices_enable"]
-    if ($null -ne $pnpEnableProperty) {
-        foreach ($devName in @($pnpEnableProperty.Value)) {
-            if ([string]::IsNullOrWhiteSpace([string]$devName)) { continue }
-            if ([string]$devName -match '^#') { continue }
-            $psCmd = 'Get-PnpDevice -FriendlyName "{0}" -ErrorAction SilentlyContinue | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue' -f $devName
-            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCmd))
-            gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
-        }
-    }
-
-    $pnpDisableProperty = $workspace.PSObject.Properties["pnp_devices_disable"]
-    if ($null -ne $pnpDisableProperty) {
-        foreach ($devName in @($pnpDisableProperty.Value)) {
-            if ([string]::IsNullOrWhiteSpace([string]$devName)) { continue }
-            if ([string]$devName -match '^#') { continue }
-            $psCmd = 'Get-PnpDevice -FriendlyName "{0}" -ErrorAction SilentlyContinue | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue' -f $devName
-            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCmd))
-            gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
-        }
-    }
-
-    $powerPlanStartProp = $workspace.PSObject.Properties["power_plan_start"]
-    $stopPlanConfigured = ($null -ne $powerPlanStopProp -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanStopProp.Value))
-    $onlyStartNoStop = ($null -ne $powerPlanStartProp -and -not [string]::IsNullOrWhiteSpace([string]$powerPlanStartProp.Value)) -and -not $stopPlanConfigured
-    if ($onlyStartNoStop) {
-        Write-Host "Note: Power plans are not automatically reverted on Stop. Use a Recovery workspace." -ForegroundColor Yellow
-    }
-
-    $registryTogglesProperty = $workspace.PSObject.Properties["registry_toggles"]
-    if ($null -ne $registryTogglesProperty) {
-        foreach ($item in @($registryTogglesProperty.Value)) {
-            if ($null -eq $item) { continue }
-            $pathProp = $item.PSObject.Properties["path"]
-            $nameProp = $item.PSObject.Properties["name"]
-            $typeProp = $item.PSObject.Properties["type"]
-            $valueStopProp = $item.PSObject.Properties["value_stop"]
-            if ($null -eq $pathProp -or $null -eq $nameProp -or $null -eq $typeProp) { continue }
-
-            $stopVal = $null
-            if ($null -ne $valueStopProp) {
-                $stopVal = $valueStopProp.Value
-            }
-            if ($null -ne $stopVal) {
-                Write-Host "Reverting Registry Key: $($nameProp.Value)..." -ForegroundColor Cyan
-                gsudo New-ItemProperty -Path $pathProp.Value -Name $nameProp.Value -Value $stopVal -PropertyType $typeProp.Value -Force 2>&1 | Out-Null
-            } else {
-                Write-Host "Note: Registry toggle '$($nameProp.Value)' has no value_stop defined. Skipping reversion." -ForegroundColor Yellow
-            }
-        }
-    }
-
-    $servicesProperty = $workspace.PSObject.Properties["services"]
-    if ($null -ne $servicesProperty) {
-        $services = @($servicesProperty.Value)
-        for ($i = $services.Count - 1; $i -ge 0; $i--) {
-            $serviceItem = $services[$i]
-            if ([string]$serviceItem -match '^#') {
-                continue
-            }
-
-            if ($serviceItem -is [string] -and $serviceItem -match "^t\s+(\d+)$") {
-                continue
-            }
-
-            $serviceName = [string]$serviceItem
-            if ($serviceName.StartsWith("?")) {
-                $serviceName = $serviceName.Substring(1)
-            }
-            $svcCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($null -eq $svcCheck) {
-                continue
-            }
-
-            Write-Host "Stopping service: $serviceName..." -ForegroundColor Cyan
-            gsudo net.exe stop $serviceName /y 2>&1 | Out-Null
-            gsudo sc.exe config $serviceName start= disabled 2>&1 | Out-Null
-        }
-    }
-
-    $reverseRelationsProperty = $workspace.PSObject.Properties["reverse_relations"]
-    if ($null -ne $reverseRelationsProperty) {
-        foreach ($revServiceName in @($reverseRelationsProperty.Value)) {
-            if ([string]$revServiceName -match '^#') {
-                continue
-            }
-            gsudo sc.exe config $revServiceName start= demand 2>&1 | Out-Null
-            gsudo net.exe start $revServiceName 2>&1 | Out-Null
-        }
-    }
-
-    if ($showNotifications) {
+    if ($Action -eq "Stop" -and $showNotifications) {
         Show-Notification -Title "Workspace Stopped" -Message "$WorkspaceName has been cleanly terminated."
     }
+} elseif ($resolvedProfileType -eq "Hardware_Override") {
+    $targetState = if ($null -ne $resolvedProfileData.PSObject.Properties["target_state"]) { [string]$resolvedProfileData.target_state } else { "" }
+    if ([string]::IsNullOrWhiteSpace($targetState)) {
+        $targetState = if ($Action -eq "Start") { "ON" } else { "OFF" }
+    }
+    if ($targetState -eq "ANY") {
+        $resolvedProfileData
+        return
+    }
+
+    $desiredState = $targetState
+    if ($Action -eq "Stop") {
+        $desiredState = if ($targetState -eq "ON") { "OFF" } else { "ON" }
+    }
+
+    Invoke-HardwareDefinitionTransition -ComponentName $WorkspaceName -Definition $resolvedProfileData -DesiredState $desiredState
 }
 
-$workspace
+$resolvedProfileData

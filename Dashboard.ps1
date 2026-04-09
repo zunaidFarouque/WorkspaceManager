@@ -6,40 +6,338 @@ $Host.UI.RawUI.WindowTitle = "WorkspaceManager Dashboard"
 
 . (Join-Path -Path $PSScriptRoot -ChildPath "WorkspaceState.ps1")
 
-function Invoke-WorkspaceCommit {
+$script:ComplianceData = @()
+$script:WorkloadStates = @()
+$script:ModeStates = @()
+$script:HasMultipleModes = $false
+$script:PendingHardwareChanges = @{}
+
+function Invoke-OrchestratorScript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [array]$UIStates,
+        [string]$OrchestratorPath,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceName,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Start", "Stop")]
+        [string]$Action,
+        [ValidateSet("App_Workload", "System_Mode", "Hardware_Override")]
+        [string]$ProfileType
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProfileType)) {
+        & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action
+    } else {
+        & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ProfileType $ProfileType
+    }
+}
+
+function Write-StateText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$State
+    )
+
+    if ([string]::IsNullOrWhiteSpace($State)) {
+        Write-Host -NoNewline "-" -ForegroundColor DarkGray
+        return
+    }
+
+    $color = switch ($State) {
+        "Inactive" { "Green" }
+        "Active" { "Red" }
+        "Mixed" { "Yellow" }
+        default { "Gray" }
+    }
+    Write-Host -NoNewline $State -ForegroundColor $color
+}
+
+function Update-DashboardDesiredStateOnSpace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$CurrentState,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$DesiredState
+    )
+
+    if ($CurrentState -eq "Mixed") {
+        if ($DesiredState -eq "Active") { return "Inactive" }
+        return "Active"
+    }
+    if ($DesiredState -eq "Active") { return "Inactive" }
+    return "Active"
+}
+
+function Update-DashboardHardwareDesiredStateOnSpace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DesiredState
+    )
+
+    if ($DesiredState -eq "ON") { return "OFF" }
+    return "ON"
+}
+
+function Save-DashboardStateMemory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ModeStates,
+        [Parameter(Mandatory = $true)]
+        [string]$StateFilePath
+    )
+
+    $activeMode = @($ModeStates | Where-Object { $_.DesiredState -eq "Active" } | Select-Object -First 1)
+    if ($activeMode.Count -eq 0) {
+        return
+    }
+
+    $payload = [pscustomobject]@{
+        Active_System_Mode = [string]$activeMode[0].Name
+    }
+    $payload | ConvertTo-Json -Depth 3 | Set-Content -Path $StateFilePath -Encoding utf8
+}
+
+function Ensure-DashboardStateMemoryFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StateFilePath
+    )
+
+    if (-not (Test-Path -Path $StateFilePath -PathType Leaf)) {
+        ([pscustomobject]@{ Active_System_Mode = $null } | ConvertTo-Json -Depth 3) | Set-Content -Path $StateFilePath -Encoding utf8
+    }
+}
+
+function Normalize-DashboardComplianceRows {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ComplianceRows,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    foreach ($row in @($ComplianceRows)) {
+        $component = [string]$row.Component
+        $targetState = [string]$row.TargetState
+
+        if ($PendingHardwareChanges.ContainsKey($component)) {
+            $row.DesiredState = [string]$PendingHardwareChanges[$component]
+        } elseif ($targetState -eq "ON" -or $targetState -eq "OFF") {
+            $row.DesiredState = $targetState
+        } else {
+            $row.DesiredState = ""
+        }
+
+        if ($null -eq $row.PSObject.Properties["ProfileType"]) {
+            $row | Add-Member -NotePropertyName ProfileType -NotePropertyValue "Hardware_Override"
+        } else {
+            $row.ProfileType = "Hardware_Override"
+        }
+        if ($null -eq $row.PSObject.Properties["Name"]) {
+            $row | Add-Member -NotePropertyName Name -NotePropertyValue $component
+        } else {
+            $row.Name = $component
+        }
+    }
+}
+
+function Get-DashboardTab3RowPresentation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Row,
+        [Parameter(Mandatory = $true)]
+        [bool]$IsSelected,
+        [hashtable]$PendingHardwareChanges = $null
+    )
+
+    $status = "[UNKNOWN]"
+    $color = "Gray"
+    $physical = if ($null -eq $Row.PhysicalState) { "-" } else { [string]$Row.PhysicalState }
+    $desired = [string]$Row.DesiredState
+    $target = [string]$Row.TargetState
+
+    if ($null -ne $PendingHardwareChanges -and $PendingHardwareChanges.ContainsKey([string]$Row.Component)) {
+        $queued = [string]$PendingHardwareChanges[[string]$Row.Component]
+        $desired = $queued
+        $status = "[QUEUED: $queued]"
+        $color = "Yellow"
+    } elseif ($target -eq "ON" -or $target -eq "OFF") {
+        $desired = $target
+        if ($Row.IsCompliant -eq $true) {
+            $status = "✓"
+            $color = "Green"
+        } elseif ($Row.IsCompliant -eq $false) {
+            $status = "[VIOLATION]"
+            $color = "Red"
+        }
+    } elseif ($target -eq "ANY") {
+        $desired = ""
+        $status = "-"
+        $color = "DarkGray"
+    }
+
+    return [pscustomobject]@{
+        Prefix   = if ($IsSelected) { " > " } else { "   " }
+        Physical = $physical
+        Desired  = $desired
+        Target   = $target
+        Status   = $status
+        Color    = $color
+    }
+}
+
+function Add-DashboardIdealHardwareToQueue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ComplianceData,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    foreach ($item in @($ComplianceData)) {
+        if ($item.IsCompliant -eq $false -and [string]$item.TargetState -ne "ANY") {
+            $PendingHardwareChanges[[string]$item.Component] = [string]$item.TargetState
+        }
+    }
+}
+
+function Toggle-DashboardQueueOverride {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Component,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    $next = "ON"
+    if ($PendingHardwareChanges.ContainsKey($Component) -and [string]$PendingHardwareChanges[$Component] -eq "ON") {
+        $next = "OFF"
+    } elseif ($PendingHardwareChanges.ContainsKey($Component) -and [string]$PendingHardwareChanges[$Component] -eq "OFF") {
+        $next = "ON"
+    }
+    $PendingHardwareChanges[$Component] = $next
+}
+
+function Clear-DashboardQueueOverride {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Component,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    if ($PendingHardwareChanges.ContainsKey($Component)) {
+        $PendingHardwareChanges.Remove($Component) | Out-Null
+    }
+}
+
+function Set-DashboardActiveBlueprint {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ModeStates,
+        [Parameter(Mandatory = $true)]
+        [string]$SelectedModeName,
+        [Parameter(Mandatory = $true)]
+        [string]$StateFilePath
+    )
+
+    foreach ($mode in @($ModeStates)) {
+        if ([string]$mode.Name -eq $SelectedModeName) {
+            $mode.CurrentState = "Active"
+            $mode.DesiredState = "Active"
+        } else {
+            $mode.CurrentState = "Inactive"
+            $mode.DesiredState = "Inactive"
+        }
+    }
+
+    $payload = [pscustomobject]@{
+        Active_System_Mode = $SelectedModeName
+    }
+    $payload | ConvertTo-Json -Depth 3 | Set-Content -Path $StateFilePath -Encoding utf8
+}
+
+function Get-DashboardFooterText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$CurrentTab
+    )
+
+    if ($CurrentTab -eq 1) {
+        return "[1][2][3] Tab | [Up/Down] Nav | [Space] Toggle Workload | [Enter] Commit | [Esc] Cancel"
+    }
+    if ($CurrentTab -eq 2) {
+        return "[1][2][3] Tab | [Up/Down] Nav | [Space] Set Blueprint | [A] Queue Ideal States | [Enter] Commit | [Esc] Cancel"
+    }
+    return "[1][2][3] Tab | [Up/Down] Nav | [Space] Toggle Override | [Bksp] Clear Queue | [Enter] Commit | [Esc] Cancel"
+}
+
+function Get-DashboardPendingCommitStates {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$WorkloadStates,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    $pendingStates = @()
+    $pendingStates += @(
+        $WorkloadStates |
+            Where-Object { $_.DesiredState -ne $_.CurrentState } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Name         = [string]$_.Name
+                    CurrentState = [string]$_.CurrentState
+                    DesiredState = [string]$_.DesiredState
+                    ProfileType  = [string]$_.ProfileType
+                    Action       = if ([string]$_.DesiredState -eq "Active") { "Start" } else { "Stop" }
+                }
+            }
+    )
+    foreach ($component in @($PendingHardwareChanges.Keys)) {
+        $pendingStates += [pscustomobject]@{
+            Name         = [string]$component
+            CurrentState = ""
+            DesiredState = [string]$PendingHardwareChanges[$component]
+            ProfileType  = "Hardware_Override"
+            Action       = if ([string]$PendingHardwareChanges[$component] -eq "ON") { "Start" } else { "Stop" }
+        }
+    }
+    return @($pendingStates)
+}
+
+function Invoke-DashboardCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [array]$PendingStates,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges,
         [Parameter(Mandatory = $true)]
         [string]$OrchestratorPath
     )
 
-    foreach ($state in $UIStates) {
-        if ($state.Type -eq "oneshot") {
-            if ($state.DesiredState -eq "Run") {
-                Write-Host "--> Orchestrating $($state.Name) to Start..."
-                Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName $state.Name -Action "Start"
-                Start-Sleep -Seconds 1
-            }
-            continue
-        }
-
-        if ($state.DesiredState -ne $state.CurrentState -and $state.DesiredState -ne "Mixed") {
-            $action = $null
-            if ($state.DesiredState -eq "Ready") {
-                $action = "Start"
-            } elseif ($state.DesiredState -eq "Stopped") {
-                $action = "Stop"
-            }
-
-            if ($null -ne $action) {
-                Write-Host "--> Orchestrating $($state.Name) to $action..."
-                Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName $state.Name -Action $action
-                Start-Sleep -Seconds 1
-            }
-        }
+    if (@($PendingStates).Count -gt 0) {
+        Invoke-WorkspaceCommit -UIStates $PendingStates -OrchestratorPath $OrchestratorPath
     }
+    $PendingHardwareChanges.Clear()
 }
 
 function Get-DashboardPostCommitMessages {
@@ -52,531 +350,177 @@ function Get-DashboardPostCommitMessages {
     )
 
     $messages = [System.Collections.Generic.List[string]]::new()
+    $systemModes = $Workspaces.PSObject.Properties["System_Modes"]
+    $hardwareDefs = $Workspaces.PSObject.Properties["Hardware_Definitions"]
 
     foreach ($state in $UIStates) {
-        $action = $null
-        $eligible = $false
-
-        if ($state.Type -eq "oneshot") {
-            if ($state.DesiredState -eq "Run") {
-                $eligible = $true
-                $action = "Start"
-            }
-        } elseif ($state.DesiredState -ne $state.CurrentState -and $state.DesiredState -ne "Mixed") {
-            if ($state.DesiredState -eq "Ready") {
-                $eligible = $true
-                $action = "Start"
-            } elseif ($state.DesiredState -eq "Stopped") {
-                $eligible = $true
-                $action = "Stop"
-            }
-        }
-
-        if (-not $eligible) {
+        if ($state.DesiredState -eq $state.CurrentState -or $state.DesiredState -eq "Mixed") {
             continue
         }
 
+        $action = if ($state.DesiredState -eq "Active") { "Start" } else { "Stop" }
         $nameKey = [string]$state.Name
-        $wsData = Get-WorkspaceRootPropertyValue -Workspaces $Workspaces -WorkspaceName $nameKey
-        if ($null -eq $wsData) {
-            continue
+        $nodes = @()
+
+        if ($null -ne $systemModes -and $null -ne $systemModes.Value.PSObject.Properties[$nameKey]) {
+            $nodes += $systemModes.Value.PSObject.Properties[$nameKey].Value
+        }
+        if ($null -ne $hardwareDefs -and $null -ne $hardwareDefs.Value.PSObject.Properties[$nameKey]) {
+            $nodes += $hardwareDefs.Value.PSObject.Properties[$nameKey].Value
         }
 
-        $postChangeProp = $wsData.PSObject.Properties["post_change_message"]
-        if ($null -ne $postChangeProp -and $null -ne $postChangeProp.Value) {
-            $messages.Add("[$nameKey] $($postChangeProp.Value)")
-        }
-        $postStartProp = $wsData.PSObject.Properties["post_start_message"]
-        if ($action -eq "Start" -and $null -ne $postStartProp -and $null -ne $postStartProp.Value) {
-            $messages.Add("[$nameKey] $($postStartProp.Value)")
-        }
-        $postStopProp = $wsData.PSObject.Properties["post_stop_message"]
-        if ($action -eq "Stop" -and $null -ne $postStopProp -and $null -ne $postStopProp.Value) {
-            $messages.Add("[$nameKey] $($postStopProp.Value)")
+        foreach ($node in $nodes) {
+            $postChange = $node.PSObject.Properties["post_change_message"]
+            if ($null -ne $postChange -and $null -ne $postChange.Value) {
+                $messages.Add("[$nameKey] $($postChange.Value)")
+            }
+
+            $postStart = $node.PSObject.Properties["post_start_message"]
+            if ($action -eq "Start" -and $null -ne $postStart -and $null -ne $postStart.Value) {
+                $messages.Add("[$nameKey] $($postStart.Value)")
+            }
+
+            $postStop = $node.PSObject.Properties["post_stop_message"]
+            if ($action -eq "Stop" -and $null -ne $postStop -and $null -ne $postStop.Value) {
+                $messages.Add("[$nameKey] $($postStop.Value)")
+            }
         }
     }
 
     return $messages.ToArray()
 }
 
-function Invoke-OrchestratorScript {
+function Invoke-WorkspaceCommit {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$OrchestratorPath,
+        [array]$UIStates,
         [Parameter(Mandatory = $true)]
-        [string]$WorkspaceName,
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("Start", "Stop")]
-        [string]$Action
+        [string]$OrchestratorPath
     )
 
-    & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action
+    foreach ($state in $UIStates) {
+        if ($state.DesiredState -eq $state.CurrentState -or $state.DesiredState -eq "Mixed") {
+            continue
+        }
+
+        $action = $null
+        if ($state.DesiredState -eq "Active" -or $state.DesiredState -eq "ON") {
+            $action = "Start"
+        } elseif ($state.DesiredState -eq "Inactive" -or $state.DesiredState -eq "OFF") {
+            $action = "Stop"
+        }
+
+        if ($null -ne $action) {
+            Write-Host "--> Orchestrating $($state.Name) to $action..."
+            $profileType = if ($null -ne $state.PSObject.Properties["ProfileType"]) { [string]$state.ProfileType } else { "" }
+            if ([string]::IsNullOrWhiteSpace($profileType)) {
+                Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName $state.Name -Action $action
+            } else {
+                Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName $state.Name -Action $action -ProfileType $profileType
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
 }
 
-function Write-ColoredStateText {
+function Get-FirstTab {
     param(
+        [Parameter(Mandatory = $true)]
+        [bool]$HasMultipleModes
+    )
+    return 1
+}
+
+function Get-ActiveStateArray {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$CurrentTab,
+        [Parameter(Mandatory = $true)]
+        [array]$WorkloadStates,
+        [Parameter(Mandatory = $true)]
+        [array]$ModeStates
+    )
+
+    if ($CurrentTab -eq 1) { return ,@($WorkloadStates) }
+    if ($CurrentTab -eq 2) { return ,@($ModeStates) }
+    return ,@()
+}
+
+function Get-DashboardDisplayState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$CurrentTab,
         [Parameter(Mandatory = $true)]
         [string]$State
     )
 
-    $stateKey = $State.Trim()
-    $color = switch ($stateKey) {
-        "Ready" { "Red" }
-        "Stopped" { "Green" }
-        "Mixed" { "Yellow" }
-        default { "Gray" }
+    if ($CurrentTab -eq 2 -and $State -eq "Inactive") {
+        return ""
     }
-
-    Write-Host -NoNewline $State -ForegroundColor $color
+    return $State
 }
 
-function Update-DashboardDesiredStateOnSpace {
+function Write-TabHeader {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$CurrentTab,
+        [Parameter(Mandatory = $true)]
+        [bool]$HasMultipleModes
+    )
+
+    $tabs = @(
+        [pscustomobject]@{ Id = 1; Label = "App Workloads" }
+    )
+    if ($HasMultipleModes) {
+        $tabs += [pscustomobject]@{ Id = 2; Label = "System Modes" }
+        $tabs += [pscustomobject]@{ Id = 3; Label = "Hardware Compliance" }
+    } else {
+        $tabs += [pscustomobject]@{ Id = 3; Label = "System Health" }
+    }
+
+    foreach ($tab in $tabs) {
+        $text = "[{0}] {1}  " -f $tab.Id, $tab.Label
+        if ($CurrentTab -eq $tab.Id) {
+            Write-Host -NoNewline $text -ForegroundColor Cyan
+        } else {
+            Write-Host -NoNewline $text
+        }
+    }
+    Write-Host ""
+}
+
+function Get-SafeConsoleWidth {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$CurrentState,
-        [Parameter(Mandatory = $true)]
-        [string]$DesiredState
-    )
+    param()
 
-    if ($Type -eq "oneshot") {
-        if ($DesiredState -eq "Run") { return "Idle" }
-        return "Run"
+    try {
+        $w = [Console]::WindowWidth
+        if ($w -gt 0) { return $w }
+    } catch {
+        # Ignore and continue to fallback.
     }
 
-    if ($CurrentState -eq "Mixed") {
-        if ($DesiredState -eq "Ready") { return "Stopped" }
-        return "Ready"
+    try {
+        $bw = [Console]::BufferWidth
+        if ($bw -gt 0) { return $bw }
+    } catch {
+        # Ignore and continue to hard fallback.
     }
 
-    if ($DesiredState -eq "Ready") { return "Stopped" }
-    return "Ready"
+    return 120
 }
 
-function Clear-DashboardDesiredState {
+function Invoke-SafeClearHost {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        [Parameter(Mandatory = $true)]
-        [string]$CurrentState
-    )
+    param()
 
-    if ($Type -eq "oneshot") {
-        return "Idle"
+    try {
+        Clear-Host
+    } catch {
+        # Non-interactive host can throw "The handle is invalid."
     }
-    return $CurrentState
-}
-
-function Get-ActionableArrayProperties {
-    @(
-        "services",
-        "services_disable",
-        "executables",
-        "scripts_start",
-        "scripts_stop",
-        "pnp_devices_enable",
-        "pnp_devices_disable",
-        "reverse_relations",
-        "protected_processes"
-    )
-}
-
-function Get-WorkspaceRootPropertyValue {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$Workspaces,
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyString()]
-        [string]$WorkspaceName
-    )
-
-    if ([string]::IsNullOrWhiteSpace($WorkspaceName)) {
-        return $null
-    }
-
-    $prop = $Workspaces.PSObject.Properties[$WorkspaceName]
-    if ($null -ne $prop) {
-        return $prop.Value
-    }
-
-    foreach ($p in $Workspaces.PSObject.Properties) {
-        if ([string]::Equals($p.Name, $WorkspaceName, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $p.Value
-        }
-    }
-
-    return $null
-}
-
-function Toggle-IgnoredValue {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Value
-    )
-
-    if ($Value -match '^#') {
-        return $Value.Substring(1)
-    }
-    return "#$Value"
-}
-
-function New-WorkspaceEditorItems {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$WorkspaceData
-    )
-
-    $items = @()
-    foreach ($propertyName in Get-ActionableArrayProperties) {
-        $property = $WorkspaceData.PSObject.Properties[$propertyName]
-        if ($null -eq $property) { continue }
-        $values = @($property.Value)
-        for ($idx = 0; $idx -lt $values.Count; $idx++) {
-            $value = [string]$values[$idx]
-            if ([string]::IsNullOrWhiteSpace($value)) { continue }
-            $items += [pscustomobject]@{
-                Property = $propertyName
-                Index    = $idx
-                Value    = $value
-            }
-        }
-    }
-    # Windows PowerShell 5.1 unwraps a single-element return value to the element itself; under StrictMode,
-    # PSCustomObject has no .Count and the Editor loop throws. Preserve a real Object[] for 0–1 items.
-    $arr = [object[]]$items
-    if ($arr.Length -le 1) {
-        return ,@($arr)
-    }
-    return $arr
-}
-
-function Set-WorkspaceEditorSelectionIgnored {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$Workspaces,
-        [Parameter(Mandatory = $true)]
-        [string]$WorkspaceName,
-        [Parameter(Mandatory = $true)]
-        [psobject]$EditorSelection,
-        [Parameter(Mandatory = $true)]
-        [string]$WorkspacePath
-    )
-
-    $workspaceData = Get-WorkspaceRootPropertyValue -Workspaces $Workspaces -WorkspaceName $WorkspaceName
-    if ($null -eq $workspaceData) {
-        throw "Workspace '$WorkspaceName' not found in loaded configuration."
-    }
-    $propertyName = [string]$EditorSelection.Property
-    $propertyNode = $workspaceData.PSObject.Properties[$propertyName]
-    if ($null -eq $propertyNode) {
-        throw "Property '$propertyName' not found in workspace '$WorkspaceName'."
-    }
-
-    $values = @($propertyNode.Value)
-    $targetIndex = [int]$EditorSelection.Index
-    if ($targetIndex -lt 0 -or $targetIndex -ge $values.Count) {
-        throw "Editor index out of range for property '$propertyName'."
-    }
-
-    $newValue = Toggle-IgnoredValue -Value ([string]$values[$targetIndex])
-    $values[$targetIndex] = $newValue
-    $workspaceData.$propertyName = @($values)
-    $EditorSelection.Value = $newValue
-    $Workspaces | ConvertTo-Json -Depth 10 | Set-Content -Path $WorkspacePath
-}
-
-function Resolve-QuotedRelativeExecutionToken {
-    param([Parameter(Mandatory)][string]$ExecutionToken)
-    $root = $PSScriptRoot
-    $wsJson = Join-Path -Path $root -ChildPath "workspaces.json"
-    if (Test-Path -LiteralPath $wsJson) {
-        $root = [System.IO.Path]::GetDirectoryName($wsJson)
-    }
-    $sep = [System.IO.Path]::DirectorySeparatorChar
-    [regex]::Replace($ExecutionToken, "^'\.[\/\\](.*?)'", {
-        param($match)
-        $relativeRemainder = $match.Groups[1].Value -replace '/', $sep
-        "'" + (Join-Path $root $relativeRemainder) + "'"
-    })
-}
-
-function Resolve-RepoRelativeFilePath {
-    param([Parameter(Mandatory)][string]$Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return $Path
-    }
-    $root = $PSScriptRoot
-    $wsJson = Join-Path -Path $root -ChildPath "workspaces.json"
-    if (Test-Path -LiteralPath $wsJson) {
-        $root = [System.IO.Path]::GetDirectoryName($wsJson)
-    }
-    $t = $Path.Trim()
-    if ($t.Length -ge 2 -and $t[0] -eq [char]'.' -and ($t[1] -eq [char]'/' -or $t[1] -eq '\')) {
-        $rest = $t.Substring(2).TrimStart([char[]]@('/', '\'))
-        $rest = $rest -replace '/', [System.IO.Path]::DirectorySeparatorChar
-        return (Join-Path $root $rest)
-    }
-    return $Path
-}
-
-function Get-WorkspaceDetails {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$WorkspaceData,
-        [array]$PnpCache = @(),
-        [Parameter(Mandatory = $true)]
-        [bool]$ShowIgnored,
-        [Parameter(Mandatory = $true)]
-        [bool]$ShowStopHooks
-    )
-
-    $details = @()
-
-    $servicesProperty = $WorkspaceData.PSObject.Properties["services"]
-    if ($null -ne $servicesProperty) {
-        foreach ($s in @($servicesProperty.Value)) {
-            $serviceName = [string]$s
-            if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -match '^t\s+(\d+)$') { continue }
-            if ($serviceName -match '^#') {
-                if ($ShowIgnored) {
-                    $label = if ($serviceName.Length -gt 1) { $serviceName.Substring(1) } else { $serviceName }
-                    $details += [pscustomobject]@{ Type = "[Svc]"; Name = "[Ignored] $label"; IsRunning = $false }
-                }
-                continue
-            }
-            if ($serviceName.StartsWith("?")) { $serviceName = $serviceName.Substring(1) }
-            $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            $details += [pscustomobject]@{ Type = "[Svc]"; Name = $serviceName; IsRunning = ($null -ne $service -and $service.Status -eq "Running") }
-        }
-    }
-
-    $servicesDisableProperty = $WorkspaceData.PSObject.Properties["services_disable"]
-    if ($null -ne $servicesDisableProperty) {
-        foreach ($s in @($servicesDisableProperty.Value)) {
-            $serviceName = [string]$s
-            if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -match '^t\s+(\d+)$') { continue }
-            if ($serviceName -match '^#') {
-                if ($ShowIgnored) {
-                    $label = if ($serviceName.Length -gt 1) { $serviceName.Substring(1) } else { $serviceName }
-                    $details += [pscustomobject]@{ Type = "[Off]"; Name = "[Ignored] $label"; IsRunning = $false }
-                }
-                continue
-            }
-            $isOptionalOff = $serviceName.StartsWith("?")
-            $displayName = if ($isOptionalOff) { $serviceName.Substring(1) } else { $serviceName }
-            $service = Get-Service -Name $displayName -ErrorAction SilentlyContinue
-            if ($null -eq $service -and $isOptionalOff) {
-                continue
-            }
-            $details += [pscustomobject]@{ Type = "[Off]"; Name = $displayName; IsRunning = ($null -ne $service -and $service.Status -ne "Running") }
-        }
-    }
-
-    $executablesProperty = $WorkspaceData.PSObject.Properties["executables"]
-    if ($null -ne $executablesProperty) {
-        foreach ($exeToken in @($executablesProperty.Value)) {
-            $exeText = [string]$exeToken
-            if ([string]::IsNullOrWhiteSpace($exeText) -or $exeText -match '^t\s+(\d+)$') { continue }
-            if ($exeText -match '^#') {
-                if ($ShowIgnored) {
-                    $label = if ($exeText.Length -gt 1) { $exeText.Substring(1) } else { $exeText }
-                    $details += [pscustomobject]@{ Type = "[Exe]"; Name = "[Ignored] $label"; IsRunning = $false }
-                }
-                continue
-            }
-            $resolvedExeText = Resolve-QuotedRelativeExecutionToken -ExecutionToken $exeText
-            if ($resolvedExeText -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-            } else {
-                $filePath = ($resolvedExeText.Split([char[]]@(' '), [System.StringSplitOptions]::RemoveEmptyEntries) | Select-Object -First 1)
-            }
-            if ([string]::IsNullOrWhiteSpace($filePath)) { continue }
-            if ($filePath.StartsWith("?")) { $filePath = $filePath.Substring(1) }
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-            $exeName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
-            if ([string]::IsNullOrWhiteSpace($exeName)) { continue }
-            $proc = Get-Process -Name $exeName -ErrorAction SilentlyContinue
-            $details += [pscustomobject]@{ Type = "[Exe]"; Name = "$exeName.exe"; IsRunning = ($null -ne $proc) }
-        }
-    }
-
-    $scriptsStartProperty = $WorkspaceData.PSObject.Properties["scripts_start"]
-    if ($null -ne $scriptsStartProperty) {
-        foreach ($scriptToken in @($scriptsStartProperty.Value)) {
-            $scriptText = [string]$scriptToken
-            if ([string]::IsNullOrWhiteSpace($scriptText) -or $scriptText -match '^t\s+(\d+)$') { continue }
-            if ($scriptText -match '^#') { continue }
-
-            $resolvedScriptText = Resolve-QuotedRelativeExecutionToken -ExecutionToken $scriptText
-            if ($resolvedScriptText -match "^'(.*?)'\s*(.*)$") {
-                $filePath = $matches[1]
-            } else {
-                $filePath = ($resolvedScriptText.Split([char[]]@(' '), [System.StringSplitOptions]::RemoveEmptyEntries) | Select-Object -First 1)
-            }
-            if ([string]::IsNullOrWhiteSpace($filePath)) { continue }
-            if ($filePath.StartsWith("?")) { $filePath = $filePath.Substring(1) }
-            $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-            $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
-            if ([string]::IsNullOrWhiteSpace($scriptName)) { continue }
-
-            $details += [pscustomobject]@{ Type = "[Scr]"; Name = $scriptName; IsRunning = $null }
-        }
-    }
-
-    if ($ShowStopHooks) {
-        $scriptsStopProperty = $WorkspaceData.PSObject.Properties["scripts_stop"]
-        if ($null -ne $scriptsStopProperty) {
-            foreach ($scriptToken in @($scriptsStopProperty.Value)) {
-                $scriptText = [string]$scriptToken
-                if ([string]::IsNullOrWhiteSpace($scriptText) -or $scriptText -match '^t\s+(\d+)$') { continue }
-                if ($scriptText -match '^#') { continue }
-
-                $resolvedScriptText = Resolve-QuotedRelativeExecutionToken -ExecutionToken $scriptText
-                if ($resolvedScriptText -match "^'(.*?)'\s*(.*)$") {
-                    $filePath = $matches[1]
-                } else {
-                    $filePath = ($resolvedScriptText.Split([char[]]@(' '), [System.StringSplitOptions]::RemoveEmptyEntries) | Select-Object -First 1)
-                }
-                if ([string]::IsNullOrWhiteSpace($filePath)) { continue }
-                if ($filePath.StartsWith("?")) { $filePath = $filePath.Substring(1) }
-                $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-                $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
-                if ([string]::IsNullOrWhiteSpace($scriptName)) { continue }
-
-                $details += [pscustomobject]@{ Type = "[ScrStop]"; Name = $scriptName; IsRunning = $null }
-            }
-        }
-    }
-
-    $pnpEnableProperty = $WorkspaceData.PSObject.Properties["pnp_devices_enable"]
-    if ($null -ne $pnpEnableProperty) {
-        foreach ($item in @($pnpEnableProperty.Value)) {
-            $devName = [string]$item
-            if ([string]::IsNullOrWhiteSpace($devName) -or $devName -match '^t\s+(\d+)$') { continue }
-            if ($devName -match '^#') {
-                if ($ShowIgnored) {
-                    $label = if ($devName.Length -gt 1) { $devName.Substring(1) } else { $devName }
-                    $details += [pscustomobject]@{ Type = "[Dev]"; Name = "[Ignored] $label"; IsRunning = $false }
-                }
-                continue
-            }
-            if ($devName.StartsWith("?")) { $devName = $devName.Substring(1) }
-            $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
-            $details += [pscustomobject]@{ Type = "[Dev]"; Name = $devName; IsRunning = ($null -ne $dev -and $dev.Status -eq "OK") }
-        }
-    }
-
-    $pnpDisableProperty = $WorkspaceData.PSObject.Properties["pnp_devices_disable"]
-    if ($null -ne $pnpDisableProperty) {
-        foreach ($item in @($pnpDisableProperty.Value)) {
-            $devName = [string]$item
-            if ([string]::IsNullOrWhiteSpace($devName) -or $devName -match '^t\s+(\d+)$') { continue }
-            if ($devName -match '^#') {
-                if ($ShowIgnored) {
-                    $label = if ($devName.Length -gt 1) { $devName.Substring(1) } else { $devName }
-                    $details += [pscustomobject]@{ Type = "[Dev]"; Name = "[Ignored] $label"; IsRunning = $false }
-                }
-                continue
-            }
-            if ($devName.StartsWith("?")) { $devName = $devName.Substring(1) }
-            $dev = $PnpCache | Where-Object { $_.Name -like $devName } | Select-Object -First 1
-            $details += [pscustomobject]@{ Type = "[Dev]"; Name = $devName; IsRunning = ($null -ne $dev -and $dev.Status -eq "OK") }
-        }
-    }
-
-    $powerPlanProperty = $WorkspaceData.PSObject.Properties["power_plan_start"]
-    if ($null -ne $powerPlanProperty) {
-        $planName = [string]$powerPlanProperty.Value
-        if (-not [string]::IsNullOrWhiteSpace($planName)) {
-            if ($planName.StartsWith("?")) { $planName = $planName.Substring(1) }
-            $active = powercfg /getactivescheme
-            $details += [pscustomobject]@{ Type = "[Pwr]"; Name = $planName; IsRunning = ($active -match [regex]::Escape($planName)) }
-        }
-    }
-
-    if ($ShowStopHooks) {
-        $powerPlanStopProperty = $WorkspaceData.PSObject.Properties["power_plan_stop"]
-        if ($null -ne $powerPlanStopProperty) {
-            $stopPlanName = [string]$powerPlanStopProperty.Value
-            if (-not [string]::IsNullOrWhiteSpace($stopPlanName)) {
-                if ($stopPlanName.StartsWith("?")) { $stopPlanName = $stopPlanName.Substring(1) }
-                $details += [pscustomobject]@{ Type = "[PwrStop]"; Name = $stopPlanName; IsRunning = $null }
-            }
-        }
-    }
-
-    $registryTogglesProperty = $WorkspaceData.PSObject.Properties["registry_toggles"]
-    if ($null -ne $registryTogglesProperty) {
-        foreach ($item in @($registryTogglesProperty.Value)) {
-            if ($null -eq $item) { continue }
-            $pathProp = $item.PSObject.Properties["path"]
-            $nameProp = $item.PSObject.Properties["name"]
-            $valueStartProp = $item.PSObject.Properties["value_start"]
-            if ($null -eq $pathProp -or $null -eq $nameProp -or $null -eq $valueStartProp) { continue }
-            $regPath = [string]$pathProp.Value
-            $regName = [string]$nameProp.Value
-            if ([string]::IsNullOrWhiteSpace($regPath) -or [string]::IsNullOrWhiteSpace($regName)) { continue }
-            if ($regName.StartsWith("?")) { $regName = $regName.Substring(1) }
-            $expectedValue = $valueStartProp.Value
-            $val = Get-ItemPropertyValue -Path $regPath -Name $regName -ErrorAction SilentlyContinue
-            $details += [pscustomobject]@{ Type = "[Reg]"; Name = $regName; IsRunning = ($val -eq $expectedValue) }
-        }
-    }
-
-    return $details
-}
-
-function Get-UIStatesFromWorkspaces {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$Workspaces,
-        [Parameter(Mandatory = $true)]
-        [array]$PnpCache,
-        [Parameter(Mandatory = $true)]
-        [bool]$ShowIgnored,
-        [Parameter(Mandatory = $true)]
-        [bool]$ShowStopHooks
-    )
-
-    $metadataKeys = @("_config", "comment", "description")
-    $states = @()
-    foreach ($prop in $Workspaces.PSObject.Properties) {
-        $name = $prop.Name
-        if ($metadataKeys -contains $name) { continue }
-        $workspaceData = $prop.Value
-        $type = "stateful"
-        $typeProperty = $workspaceData.PSObject.Properties["type"]
-        if ($null -ne $typeProperty -and -not [string]::IsNullOrWhiteSpace([string]$typeProperty.Value)) {
-            $type = [string]$typeProperty.Value
-        }
-        $tags = @()
-        $tagsProperty = $workspaceData.PSObject.Properties["tags"]
-        if ($null -ne $tagsProperty) {
-            $tags = @($tagsProperty.Value | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
-        }
-        $desc = if ($null -ne $workspaceData.PSObject.Properties["description"]) { $workspaceData.description } else { "" }
-        $current = if ($type -eq "oneshot") { "Idle" } else { Get-WorkspaceState -Workspace $workspaceData -PnpCache $PnpCache }
-        $details = Get-WorkspaceDetails -WorkspaceData $workspaceData -PnpCache $PnpCache -ShowIgnored:$ShowIgnored -ShowStopHooks:$ShowStopHooks
-        $states += [pscustomobject]@{
-            Name         = $name
-            CurrentState = $current
-            DesiredState = $current
-            Details      = $details
-            Tags         = $tags
-            Type         = $type
-            Description  = $desc
-        }
-    }
-    return $states
 }
 
 function Start-Dashboard {
@@ -586,166 +530,164 @@ function Start-Dashboard {
     }
 
     $workspaces = Get-Content -Path $jsonPath -Raw -Encoding utf8 | ConvertFrom-Json
+    $stateFilePath = Join-Path -Path $PSScriptRoot -ChildPath "state.json"
+    Ensure-DashboardStateMemoryFile -StateFilePath $stateFilePath
     Write-Host "Scanning hardware devices..." -ForegroundColor DarkGray
     $globalPnpCache = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue
-    $showIgnored = $false
-    $showStopHooks = $false
-    $UIStates = Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $globalPnpCache -ShowIgnored:$showIgnored -ShowStopHooks:$showStopHooks
 
-    if ($UIStates.Count -eq 0) {
-        Write-Host "No workspaces found in workspaces.json."
+    $stateEngine = Get-WorkspaceState -Workspace $workspaces -PnpCache $globalPnpCache
+    $script:ComplianceData = @($stateEngine.Compliance)
+    Normalize-DashboardComplianceRows -ComplianceRows $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+
+    $workloadResults = $stateEngine.AppWorkloads
+    $modeResults = $stateEngine.SystemModes
+    $workloadsNode = $workspaces.PSObject.Properties["App_Workloads"]
+    $modesNode = $workspaces.PSObject.Properties["System_Modes"]
+
+    $script:WorkloadStates = @()
+    if ($null -ne $workloadResults) {
+        foreach ($prop in $workloadResults.PSObject.Properties) {
+            $desc = ""
+            if ($null -ne $workloadsNode -and $null -ne $workloadsNode.Value.PSObject.Properties[$prop.Name]) {
+                $wlData = $workloadsNode.Value.PSObject.Properties[$prop.Name].Value
+                if ($null -ne $wlData.PSObject.Properties["description"]) {
+                    $desc = [string]$wlData.description
+                }
+            }
+            $curr = [string]$prop.Value.Status
+            $script:WorkloadStates += [pscustomobject]@{
+                Name         = $prop.Name
+                CurrentState = $curr
+                DesiredState = $curr
+                Description  = $desc
+                ProfileType  = "App_Workload"
+            }
+        }
+    }
+
+    $script:ModeStates = @()
+    if ($null -ne $modeResults) {
+        foreach ($prop in $modeResults.PSObject.Properties) {
+            $desc = ""
+            if ($null -ne $modesNode -and $null -ne $modesNode.Value.PSObject.Properties[$prop.Name]) {
+                $modeData = $modesNode.Value.PSObject.Properties[$prop.Name].Value
+                if ($null -ne $modeData.PSObject.Properties["description"]) {
+                    $desc = [string]$modeData.description
+                }
+            }
+            $curr = [string]$prop.Value.Status
+            $script:ModeStates += [pscustomobject]@{
+                Name         = $prop.Name
+                CurrentState = $curr
+                DesiredState = $curr
+                Description  = $desc
+                ProfileType  = "System_Mode"
+            }
+        }
+    }
+
+    $script:HasMultipleModes = ($script:ModeStates.Count -gt 1)
+
+    if ($script:WorkloadStates.Count -eq 0 -and $script:ModeStates.Count -eq 0) {
+        Write-Host "No profiles found in workspaces.json."
         exit
     }
 
+    $CurrentTab = Get-FirstTab -HasMultipleModes $script:HasMultipleModes
     $cursorIndex = 0
-    $DetailedMode = $false
-    $MenuState = "Master"
-    $activeWorkspace = $null
-    $editorItems = @()
-    $nameColumnWidth = 42
     $isRendering = $true
     $needsRedraw = $true
-    $AllTabs = @("All")
-    foreach ($ui in $UIStates) {
-        foreach ($tag in @($ui.Tags)) {
-            if ($AllTabs -notcontains $tag) {
-                $AllTabs += $tag
-            }
-        }
-    }
-    $activeTab = "All"
+    $abortDueToInputUnavailable = $false
+    $nameColumnWidth = 42
+    $descLineWidth = [Math]::Max(20, (Get-SafeConsoleWidth) - 4)
 
     while ($isRendering) {
-        $visibleStates = @()
-        foreach ($ui in $UIStates) {
-            $uiTags = @()
-            $tagsProp = $ui.PSObject.Properties["Tags"]
-            if ($null -ne $tagsProp) {
-                $uiTags = @($tagsProp.Value)
-            }
-
-            if ($activeTab -eq "All" -or $uiTags -contains $activeTab) {
-                $visibleStates += $ui
-            }
-        }
-        if ($MenuState -eq "Editor") {
-            if ($editorItems.Count -eq 0) {
-                $cursorIndex = 0
-            } elseif ($cursorIndex -ge $editorItems.Count) {
-                $cursorIndex = 0
-            }
-        } else {
-            if ($visibleStates.Count -eq 0) {
-                $cursorIndex = 0
-            } elseif ($cursorIndex -ge $visibleStates.Count) {
-                $cursorIndex = 0
-            }
+        $activeStates = if ($CurrentTab -eq 3) { @($script:ComplianceData) } else { Get-ActiveStateArray -CurrentTab $CurrentTab -WorkloadStates $script:WorkloadStates -ModeStates $script:ModeStates }
+        if (@($activeStates).Count -eq 0) {
+            $cursorIndex = 0
+        } elseif ($cursorIndex -ge @($activeStates).Count) {
+            $cursorIndex = 0
         }
 
         if ($needsRedraw) {
-            if ($MenuState -eq "Master") {
-                Clear-Host
-                Write-Host "=== WORKSPACEMANAGER DASHBOARD ==="
-                Write-Host " "
-                for ($tabIdx = 0; $tabIdx -lt $AllTabs.Count; $tabIdx++) {
-                    $tabText = "[$($tabIdx + 1)] $($AllTabs[$tabIdx])  "
-                    if ($AllTabs[$tabIdx] -eq $activeTab) {
-                        Write-Host -NoNewline $tabText -ForegroundColor Cyan
-                    } else {
-                        Write-Host -NoNewline $tabText
-                    }
-                }
-                Write-Host ""
-                Write-Host "   Profiles                               |  Current  ->  Desired"
+            Invoke-SafeClearHost
+            Write-Host "=== WORKSPACEMANAGER DASHBOARD ==="
+            Write-Host " "
+            Write-TabHeader -CurrentTab $CurrentTab -HasMultipleModes $script:HasMultipleModes
+            Write-Host ""
+
+            if ($CurrentTab -eq 1 -or $CurrentTab -eq 2) {
+                $title = if ($CurrentTab -eq 1) { "App Workloads" } else { "System Modes" }
+                Write-Host ("   {0}" -f $title).PadRight($nameColumnWidth)
                 Write-Host "------------------------------------------+-------------------------"
-                if ($visibleStates.Count -eq 0) {
-                    Write-Host "   (No workspaces in this tab)" -ForegroundColor DarkGray
+                if (@($activeStates).Count -eq 0) {
+                    Write-Host "   (No items available)" -ForegroundColor DarkGray
                 }
 
-                for ($i = 0; $i -lt $visibleStates.Count; $i++) {
-                    $state = $visibleStates[$i]
+                for ($i = 0; $i -lt @($activeStates).Count; $i++) {
+                    $state = $activeStates[$i]
                     $prefix = if ($i -eq $cursorIndex) { " > " } else { "   " }
                     $paddedName = $state.Name.PadRight($nameColumnWidth - 3)
-
                     Write-Host -NoNewline $prefix
                     Write-Host -NoNewline $paddedName -ForegroundColor Cyan
                     Write-Host -NoNewline "|  "
-
-                    if ($state.Type -eq "oneshot") {
-                        if ($state.DesiredState -eq "Run") {
-                            Write-Host -NoNewline "-> Run" -ForegroundColor Magenta
-                        } else {
-                            Write-Host -NoNewline "One-Shot" -ForegroundColor DarkGray
-                        }
-                    } elseif ($state.CurrentState -eq $state.DesiredState) {
-                        Write-ColoredStateText -State $state.CurrentState
+                    $displayCurrentState = Get-DashboardDisplayState -CurrentTab $CurrentTab -State ([string]$state.CurrentState)
+                    $displayDesiredState = Get-DashboardDisplayState -CurrentTab $CurrentTab -State ([string]$state.DesiredState)
+                    if ($displayCurrentState -eq $displayDesiredState) {
+                        Write-StateText -State $displayCurrentState
                     } else {
-                        $currentText = [string]$state.CurrentState
-                        Write-ColoredStateText -State $currentText
-                        $currentPadCount = 8 - $currentText.Length
+                        $currentText = $displayCurrentState
+                        Write-StateText -State $currentText
+                        $currentPadCount = 10 - $currentText.Length
                         if ($currentPadCount -gt 0) { Write-Host -NoNewline (" " * $currentPadCount) }
-                        Write-Host -NoNewline " ->  "
-                        Write-ColoredStateText -State $state.DesiredState
+                        Write-Host -NoNewline "->  "
+                        Write-StateText -State $displayDesiredState
                     }
                     Write-Host ""
-
-                    if ($DetailedMode -eq $true) {
-                        foreach ($detail in $state.Details) {
-                            $icon = if ($null -eq $detail.IsRunning) { " -" } elseif ($detail.IsRunning) { " " + [char]0x25B6 } else { " o" }
-                            $detailPrefix = "      "
-                            $detailType = if ($null -ne $detail.PSObject.Properties["Type"] -and -not [string]::IsNullOrWhiteSpace([string]$detail.Type)) { [string]$detail.Type } else { "[Obj]" }
-                            $detailText = "$detailType $($detail.Name)".PadRight($nameColumnWidth - 12)
-                            if ([string]$detail.Name -match '^\[Ignored\]') {
-                                Write-Host "$detailPrefix$icon $detailText" -ForegroundColor DarkGray
-                            } elseif ($null -eq $detail.IsRunning) {
-                                Write-Host "$detailPrefix$icon $detailText" -ForegroundColor DarkGray
-                            } else {
-                                Write-Host "$detailPrefix$icon $detailText"
-                            }
-                        }
-                    }
                 }
 
                 Write-Host ""
-                if ($visibleStates.Count -gt 0) {
-                    $selected = $visibleStates[$cursorIndex]
-                    if (-not [string]::IsNullOrWhiteSpace($selected.Description)) {
-                        $infoMark = [char]0x24D8
-                        Write-Host ('  {0}  {1}' -f $infoMark, $selected.Description) -ForegroundColor Cyan
-                    } else {
-                        Write-Host ""
+                if (@($activeStates).Count -gt 0) {
+                    $selected = $activeStates[$cursorIndex]
+                    $desc = [string]$selected.Description
+                    if ([string]::IsNullOrWhiteSpace($desc)) {
+                        $desc = ""
                     }
+                    $descLine = ("  " + $desc).PadRight($descLineWidth)
+                    Write-Host $descLine.Substring(0, [Math]::Min($descLine.Length, $descLineWidth)) -ForegroundColor Cyan
                 } else {
-                    Write-Host ""
+                    Write-Host ("").PadRight($descLineWidth)
                 }
                 Write-Host ""
-                Write-Host '[Up/Down] Nav | [Right] Edit | [Space] Toggle | [Bksp] Clear' -ForegroundColor Gray
-                Write-Host ('[F1] Details  | [F2] Stop hooks: ' + $showStopHooks + ' | [F3] Ignored: ' + $showIgnored + ' | [Enter] Commit | [Esc] Cancel') -ForegroundColor Gray
-            } elseif ($MenuState -eq "Editor") {
-                Clear-Host
-                Write-Host "=== EDITING: $($activeWorkspace.Name) ==="
-                Write-Host ""
-                if ($editorItems.Count -eq 0) {
-                    Write-Host "   (No editable items in this workspace)" -ForegroundColor DarkGray
-                } else {
-                    for ($i = 0; $i -lt $editorItems.Count; $i++) {
-                        $item = $editorItems[$i]
-                        $prefix = if ($i -eq $cursorIndex) { " > " } else { "   " }
-                        $text = "[$($item.Property)] $($item.Value)"
-                        if ($item.Value -match '^#') {
-                            Write-Host "$prefix$text" -ForegroundColor DarkGray
-                        } else {
-                            Write-Host "$prefix$text"
-                        }
-                    }
+                Write-Host (Get-DashboardFooterText -CurrentTab $CurrentTab) -ForegroundColor Gray
+            } else {
+                Write-Host "Component                      | Physical | Desired | Status"
+                Write-Host "-------------------------------+----------+---------+------------"
+                for ($i = 0; $i -lt @($script:ComplianceData).Count; $i++) {
+                    $row = $script:ComplianceData[$i]
+                    $view = Get-DashboardTab3RowPresentation -Row $row -IsSelected ($i -eq $cursorIndex) -PendingHardwareChanges $script:PendingHardwareChanges
+                    $component = [string]$row.Component
+                    $line = "{0}{1,-30} | {2,-8} | {3,-7} | {4}" -f $view.Prefix, $component, $view.Physical, $view.Desired, $view.Status
+                    Write-Host $line -ForegroundColor $view.Color
                 }
                 Write-Host ""
-                Write-Host '[Up/Down] Nav | [Space] Toggle Ignore | [Left] Back' -ForegroundColor Gray
+                Write-Host (Get-DashboardFooterText -CurrentTab $CurrentTab) -ForegroundColor Gray
             }
+
             $needsRedraw = $false
         }
 
-        if ([Console]::KeyAvailable) {
+        $keyAvailable = $false
+        try {
+            $keyAvailable = [Console]::KeyAvailable
+        } catch {
+            Write-Host "Keyboard input is not available in this host. Run Dashboard.ps1 in an interactive console." -ForegroundColor Yellow
+            $abortDueToInputUnavailable = $true
+            $isRendering = $false
+            break
+        }
+
+        if ($keyAvailable) {
             try {
                 $key = [Console]::ReadKey($true).Key
             } catch {
@@ -753,117 +695,81 @@ function Start-Dashboard {
                 break
             }
 
-            if ($MenuState -eq "Master") {
-                switch ($key) {
+            switch ($key) {
+                "D1" { $CurrentTab = 1; $cursorIndex = 0; $needsRedraw = $true; continue }
+                "NumPad1" { $CurrentTab = 1; $cursorIndex = 0; $needsRedraw = $true; continue }
+                "D2" {
+                    if ($script:HasMultipleModes) {
+                        $CurrentTab = 2; $cursorIndex = 0; $needsRedraw = $true
+                    }
+                    continue
+                }
+                "NumPad2" {
+                    if ($script:HasMultipleModes) {
+                        $CurrentTab = 2; $cursorIndex = 0; $needsRedraw = $true
+                    }
+                    continue
+                }
+                "D3" { $CurrentTab = 3; $cursorIndex = 0; $needsRedraw = $true; continue }
+                "NumPad3" { $CurrentTab = 3; $cursorIndex = 0; $needsRedraw = $true; continue }
                 "UpArrow" {
-                    if ($cursorIndex -gt 0) { $cursorIndex-- }
+                    if (($CurrentTab -eq 1 -or $CurrentTab -eq 2 -or $CurrentTab -eq 3) -and $cursorIndex -gt 0) { $cursorIndex-- }
                 }
                 "DownArrow" {
-                    if ($cursorIndex -lt ($visibleStates.Count - 1)) { $cursorIndex++ }
-                }
-                "RightArrow" {
-                    if ($visibleStates.Count -eq 0) { continue }
-                    $activeWorkspace = $visibleStates[$cursorIndex]
-                    $wkName = [string]$activeWorkspace.Name
-                    $workspaceData = Get-WorkspaceRootPropertyValue -Workspaces $workspaces -WorkspaceName $wkName
-                    if ($null -eq $workspaceData) {
-                        Clear-Host
-                        Write-Host "Cannot open editor: workspace '$wkName' is missing from the loaded configuration." -ForegroundColor Red
-                        Write-Host "Press any key to return..." -ForegroundColor Gray
-                        try {
-                            [Console]::ReadKey($true) | Out-Null
-                        } catch {
-                            Start-Sleep -Seconds 2
-                        }
-                        $needsRedraw = $true
-                        continue
+                    if ($CurrentTab -eq 1 -or $CurrentTab -eq 2 -or $CurrentTab -eq 3) {
+                        $active = Get-ActiveStateArray -CurrentTab $CurrentTab -WorkloadStates $script:WorkloadStates -ModeStates $script:ModeStates
+                        if ($CurrentTab -eq 3) { $active = @($script:ComplianceData) }
+                        if ($cursorIndex -lt (@($active).Count - 1)) { $cursorIndex++ }
                     }
-                    try {
-                        $editorItems = New-WorkspaceEditorItems -WorkspaceData $workspaceData
-                    } catch {
-                        Clear-Host
-                        Write-Host "Cannot open editor for '$wkName': $($_.Exception.Message)" -ForegroundColor Red
-                        Write-Host "Press any key to return..." -ForegroundColor Gray
-                        try {
-                            [Console]::ReadKey($true) | Out-Null
-                        } catch {
-                            Start-Sleep -Seconds 2
-                        }
-                        $needsRedraw = $true
-                        continue
-                    }
-                    $MenuState = "Editor"
-                    $cursorIndex = 0
                 }
                 "Spacebar" {
-                    if ($visibleStates.Count -eq 0) { continue }
-                    $selected = $visibleStates[$cursorIndex]
-                    $selected.DesiredState = Update-DashboardDesiredStateOnSpace `
-                        -Type ([string]$selected.Type) `
-                        -CurrentState ([string]$selected.CurrentState) `
-                        -DesiredState ([string]$selected.DesiredState)
+                    if ($CurrentTab -eq 1 -or $CurrentTab -eq 2) {
+                        if ($CurrentTab -eq 1) {
+                            $active = Get-ActiveStateArray -CurrentTab $CurrentTab -WorkloadStates $script:WorkloadStates -ModeStates $script:ModeStates
+                            if (@($active).Count -gt 0) {
+                                $selected = $active[$cursorIndex]
+                                $selected.DesiredState = Update-DashboardDesiredStateOnSpace `
+                                    -CurrentState ([string]$selected.CurrentState) `
+                                    -DesiredState ([string]$selected.DesiredState)
+                            }
+                        } elseif ($CurrentTab -eq 2) {
+                            $active = @($script:ModeStates)
+                            if (@($active).Count -gt 0) {
+                                $selected = $active[$cursorIndex]
+                                Set-DashboardActiveBlueprint -ModeStates $script:ModeStates -SelectedModeName ([string]$selected.Name) -StateFilePath $stateFilePath
+                                $stateEngine = Get-WorkspaceState -Workspace $workspaces -PnpCache $globalPnpCache
+                                $script:ComplianceData = @($stateEngine.Compliance)
+                                Normalize-DashboardComplianceRows -ComplianceRows $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+                            }
+                        }
+                    } elseif ($CurrentTab -eq 3) {
+                        if (@($script:ComplianceData).Count -gt 0) {
+                            $selected = $script:ComplianceData[$cursorIndex]
+                            Toggle-DashboardQueueOverride -Component ([string]$selected.Component) -PendingHardwareChanges $script:PendingHardwareChanges
+                            Normalize-DashboardComplianceRows -ComplianceRows $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+                        }
+                    }
+                }
+                "A" {
+                    if ($CurrentTab -eq 2) {
+                        Add-DashboardIdealHardwareToQueue -ComplianceData $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+                    }
                 }
                 "Backspace" {
-                    if ($visibleStates.Count -eq 0) { continue }
-                    $selected = $visibleStates[$cursorIndex]
-                    $selected.DesiredState = Clear-DashboardDesiredState `
-                        -Type ([string]$selected.Type) `
-                        -CurrentState ([string]$selected.CurrentState)
-                }
-                "F1" {
-                    $DetailedMode = -not $DetailedMode
-                }
-                "F2" {
-                    $showStopHooks = -not $showStopHooks
-                    $UIStates = Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $globalPnpCache -ShowIgnored:$showIgnored -ShowStopHooks:$showStopHooks
-                }
-                "F3" {
-                    $showIgnored = -not $showIgnored
-                    $UIStates = Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $globalPnpCache -ShowIgnored:$showIgnored -ShowStopHooks:$showStopHooks
+                    if ($CurrentTab -eq 3 -and @($script:ComplianceData).Count -gt 0) {
+                        $selected = $script:ComplianceData[$cursorIndex]
+                        Clear-DashboardQueueOverride -Component ([string]$selected.Component) -PendingHardwareChanges $script:PendingHardwareChanges
+                        Normalize-DashboardComplianceRows -ComplianceRows $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+                    }
                 }
                 "Escape" {
-                    Clear-Host
+                    Invoke-SafeClearHost
                     Write-Host "Cancelled."
                     exit
                 }
                 "Enter" {
                     $isRendering = $false
                     break
-                }
-                default {
-                    $keyName = [string]$key
-                    if ($keyName -match "^(?:D|NumPad)([1-9])$") {
-                        $tabIndex = [int]$matches[1] - 1
-                        if ($tabIndex -ge 0 -and $tabIndex -lt $AllTabs.Count) {
-                            $activeTab = $AllTabs[$tabIndex]
-                            $cursorIndex = 0
-                        }
-                    }
-                }
-                }
-            } else {
-                switch ($key) {
-                "UpArrow" {
-                    if ($cursorIndex -gt 0) { $cursorIndex-- }
-                }
-                "DownArrow" {
-                    if ($cursorIndex -lt ($editorItems.Count - 1)) { $cursorIndex++ }
-                }
-                "LeftArrow" {
-                    $MenuState = "Master"
-                    $UIStates = Get-UIStatesFromWorkspaces -Workspaces $workspaces -PnpCache $globalPnpCache -ShowIgnored:$showIgnored -ShowStopHooks:$showStopHooks
-                    $cursorIndex = 0
-                }
-                "Spacebar" {
-                    if ($editorItems.Count -eq 0) { continue }
-                    $selectedEditorItem = $editorItems[$cursorIndex]
-                    Set-WorkspaceEditorSelectionIgnored -Workspaces $workspaces -WorkspaceName $activeWorkspace.Name -EditorSelection $selectedEditorItem -WorkspacePath $jsonPath
-                }
-                "Escape" {
-                    Clear-Host
-                    Write-Host "Cancelled."
-                    exit
-                }
                 }
             }
             $needsRedraw = $true
@@ -872,12 +778,19 @@ function Start-Dashboard {
         }
     }
 
-    Clear-Host
+    if ($abortDueToInputUnavailable) {
+        exit 1
+    }
+
+    Invoke-SafeClearHost
     Write-Host "Committing state changes..."
     $OrchestratorPath = Join-Path -Path $PSScriptRoot -ChildPath "Orchestrator.ps1"
-    Invoke-WorkspaceCommit -UIStates $UIStates -OrchestratorPath $OrchestratorPath
+    Save-DashboardStateMemory -ModeStates $script:ModeStates -StateFilePath $stateFilePath
 
-    $pendingMessages = @(Get-DashboardPostCommitMessages -UIStates $UIStates -Workspaces $workspaces)
+    $pendingStates = Get-DashboardPendingCommitStates -WorkloadStates $script:WorkloadStates -PendingHardwareChanges $script:PendingHardwareChanges
+    Invoke-DashboardCommit -PendingStates $pendingStates -PendingHardwareChanges $script:PendingHardwareChanges -OrchestratorPath $OrchestratorPath
+
+    $pendingMessages = @(Get-DashboardPostCommitMessages -UIStates $pendingStates -Workspaces $workspaces)
     if ($pendingMessages.Count -gt 0) {
         Write-Host ""
         Write-Host "=== REQUIRED ACTIONS ===" -ForegroundColor Yellow
@@ -890,11 +803,11 @@ function Start-Dashboard {
         exit
     }
 
-    Write-Host '[ SUCCESS ] Workspaces updated.'
+    Write-Host "[ SUCCESS ] Workspaces updated."
     Start-Sleep -Seconds 2
     exit
 }
 
-if ($MyInvocation.InvocationName -ne '.') {
+if ($MyInvocation.InvocationName -ne ".") {
     Start-Dashboard
 }

@@ -68,6 +68,33 @@ if ($null -ne $configProperty) {
     }
 }
 
+$script:ExecutionWaitTimeoutMs = 15000
+
+function Wait-ProcessWithTimeout {
+    param(
+        [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory)][int]$TimeoutMs,
+        [Parameter(Mandatory)][string]$OperationName
+    )
+
+    if ($TimeoutMs -le 0) {
+        $Process.WaitForExit()
+        return
+    }
+
+    $finished = $Process.WaitForExit($TimeoutMs)
+    if (-not $finished) {
+        try {
+            if (-not $Process.HasExited) {
+                $Process.Kill($true)
+            }
+        } catch {
+            # Best effort cleanup; continue with warning below.
+        }
+        Write-Warning "Timeout while waiting for '$OperationName'. Continuing after $TimeoutMs ms."
+    }
+}
+
 function Resolve-QuotedRelativeExecutionToken {
     param([Parameter(Mandatory)][string]$ExecutionToken)
     $root = $script:OrchestratorRepoRoot
@@ -125,7 +152,7 @@ function Start-ShortcutOrUrlShellExecute {
     }
     $proc = [System.Diagnostics.Process]::Start($psi)
     if ($Wait -and $null -ne $proc) {
-        $proc.WaitForExit()
+        Wait-ProcessWithTimeout -Process $proc -TimeoutMs $script:ExecutionWaitTimeoutMs -OperationName $full
     }
 }
 
@@ -138,13 +165,29 @@ function Invoke-ExecutionToken {
     $token = Resolve-QuotedRelativeExecutionToken -ExecutionToken $ExecutionToken
     $filePath = $token
     $argumentList = ""
+    $tokenWasQuotedPath = $false
     if ($token -match "^'(.*?)'\s*(.*)$") {
+        $filePath = $matches[1]
+        $argumentList = $matches[2]
+        $tokenWasQuotedPath = $true
+    } elseif ($token -match "^(\S+)\s+(.+)$") {
+        # Support command tokens like: gsudo taskkill /F /IM GCC.exe
         $filePath = $matches[1]
         $argumentList = $matches[2]
     }
 
-    $filePath = Resolve-RepoRelativeFilePath -Path $filePath
-    $filePath = [System.IO.Path]::GetFullPath($filePath)
+    $shouldResolveAsPath = $tokenWasQuotedPath -or
+        $filePath.StartsWith(".\") -or
+        $filePath.StartsWith("./") -or
+        $filePath -match '^[a-zA-Z]:[\\/]' -or
+        $filePath.Contains("\") -or
+        $filePath.Contains("/")
+
+    if ($shouldResolveAsPath) {
+        $filePath = Resolve-RepoRelativeFilePath -Path $filePath
+        $filePath = [System.IO.Path]::GetFullPath($filePath)
+    }
+
     $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
 
     if ($filePath -match '\.ps1$') {
@@ -171,10 +214,18 @@ function Invoke-ExecutionToken {
     }
 
     if ($Wait) {
-        if ([string]::IsNullOrWhiteSpace($argumentList)) {
-            Start-Process -FilePath $filePath -Wait -NoNewWindow 2>&1 | Out-Null
-        } else {
-            Start-Process -FilePath $filePath -ArgumentList $argumentList -Wait -NoNewWindow 2>&1 | Out-Null
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $filePath
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        if (-not [string]::IsNullOrWhiteSpace($argumentList)) {
+            $psi.Arguments = $argumentList
+        }
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if ($null -ne $proc) {
+            $opName = if ([string]::IsNullOrWhiteSpace($argumentList)) { $filePath } else { "$filePath $argumentList" }
+            Wait-ProcessWithTimeout -Process $proc -TimeoutMs $script:ExecutionWaitTimeoutMs -OperationName $opName
         }
     } else {
         if ([string]::IsNullOrWhiteSpace($argumentList)) {

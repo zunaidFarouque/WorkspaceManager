@@ -107,6 +107,17 @@ Describe "Dashboard Phase 3 Post-Commit Messaging" {
         $result[0] | Should -Be "[GPU_Scheduling_HAGS] HAGS changed."
         $result[1] | Should -Be "[GPU_Scheduling_HAGS] Restart required."
     }
+
+    It "returns empty messages when UIStates is empty" {
+        $workspaces = [pscustomobject]@{
+            System_Modes = [pscustomobject]@{}
+            Hardware_Definitions = [pscustomobject]@{}
+        }
+
+        $result = @(Get-DashboardPostCommitMessages -UIStates @() -Workspaces $workspaces)
+
+        $result.Count | Should -Be 0
+    }
 }
 
 Describe "Dashboard Tab 3 Manual Override Console" {
@@ -308,9 +319,10 @@ Describe "Dashboard Tab 2/3 Queue Workflow" {
     }
 
     It "renders tab-specific footer action text" {
-        Get-DashboardFooterText -CurrentTab 1 | Should -Match '\[Space\] Toggle Workload \| \[`+\] Details: None \| \[Enter\] Commit'
-        Get-DashboardFooterText -CurrentTab 2 | Should -Match '\[Space\] Set Blueprint \| \[A\] Queue Ideal States \| \[Enter\] Commit'
-        Get-DashboardFooterText -CurrentTab 3 | Should -Match '\[Space\] Toggle Override \| \[Bksp\] Clear Queue \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 1 | Should -Match '\[1\]\[2\]\[3\]\[4\] Tab \| \[Up/Down\] Nav \| \[Space\] Toggle Workload \| \[`\] Details: None \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 2 | Should -Match '\[1\]\[2\]\[3\]\[4\] Tab \| \[Up/Down\] Nav \| \[Space\] Set Blueprint \| \[A\] Queue Ideal States \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 3 | Should -Match '\[1\]\[2\]\[3\]\[4\] Tab \| \[Up/Down\] Nav \| \[Space\] Toggle Override \| \[Bksp\] Clear Queue \| \[Enter\] Commit'
+        Get-DashboardFooterText -CurrentTab 4 | Should -Match '\[1\]\[2\]\[3\]\[4\] Tab \| \[Up/Down\] Nav \| \[Space\] Queue Toggle/Cycle \| \[Right\] Edit \| \[Left or \+/-\] Poll Seconds \| \[Enter\] Commit'
     }
 
     It "sets active blueprint immediately and updates mode rows" {
@@ -327,6 +339,141 @@ Describe "Dashboard Tab 2/3 Queue Workflow" {
         @($modeStates | Where-Object { $_.CurrentState -eq "Active" }).Count | Should -Be 1
         @($modeStates | Where-Object { $_.DesiredState -eq "Active" }).Count | Should -Be 1
         (@($modeStates | Where-Object { $_.Name -eq "Eco_Life" })[0].CurrentState) | Should -Be "Active"
+    }
+}
+
+Describe "Dashboard Tab 4 Settings" {
+    BeforeAll {
+        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+    }
+
+    It "returns settings as active array for tab 4" {
+        $settings = @([pscustomobject]@{ Key = "notifications"; Type = "bool"; Value = $true })
+        $rows = Get-ActiveStateArray -CurrentTab 4 -WorkloadStates @([pscustomobject]@{ Name = "dummy" }) -ModeStates @([pscustomobject]@{ Name = "dummy" }) -SettingsStates $settings
+        @($rows).Count | Should -Be 1
+        $rows[0].Key | Should -Be "notifications"
+    }
+
+    It "loads configured settings rows and provides descriptions" {
+        $workspaces = [pscustomobject]@{
+            _config = [pscustomobject]@{
+                console_style = "Normal"
+                enable_interceptors = $true
+                notifications = $false
+                interceptor_poll_max_seconds = 15
+                shortcut_prefix_start = "!Start-"
+                shortcut_prefix_stop = "!Stop-"
+                untouched_key = "keep"
+            }
+        }
+
+        $rows = @(Get-DashboardSettingsRows -Workspaces $workspaces)
+        $rows.Count | Should -Be 6
+        (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Type | Should -Be "bool"
+        (@($rows | Where-Object { $_.Key -eq "interceptor_poll_max_seconds" }))[0].Type | Should -Be "int"
+        (@($rows | Where-Object { $_.Key -eq "shortcut_prefix_start" }))[0].Description.Length | Should -BeGreaterThan 5
+        (@($rows | Where-Object { $_.Key -eq "console_style" }))[0].Description | Should -Match 'spacing|detail'
+        (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Description | Should -Match 'executable interceptors'
+        (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Description | Should -Not -Match 'Office executable'
+        (@($rows | Where-Object { $_.Key -eq "interceptor_poll_max_seconds" }))[0].Example | Should -Match 'Example: 15'
+    }
+
+    It "toggles bool and cycles choice on space" {
+        $boolRow = [pscustomobject]@{ Key = "notifications"; Type = "bool"; Value = $false; Choices = @(); Min = $null; Description = "" }
+        $choiceRow = [pscustomobject]@{ Key = "console_style"; Type = "choice"; Value = "Normal"; Choices = @("Normal", "Compact"); Min = $null; Description = "" }
+
+        (Update-DashboardSettingsValueOnSpace -Row $boolRow) | Should -BeTrue
+        $boolRow.Value | Should -BeTrue
+
+        (Update-DashboardSettingsValueOnSpace -Row $choiceRow) | Should -BeTrue
+        $choiceRow.Value | Should -Be "Compact"
+    }
+
+    It "updates numeric setting with floor validation" {
+        $row = [pscustomobject]@{ Key = "interceptor_poll_max_seconds"; Type = "int"; Value = 2; Choices = @(); Min = 1; Description = "" }
+        (Update-DashboardSettingsNumericValue -Row $row -Delta -1) | Should -BeTrue
+        $row.Value | Should -Be 1
+        (Update-DashboardSettingsNumericValue -Row $row -Delta -10) | Should -BeTrue
+        $row.Value | Should -Be 1
+        (Update-DashboardSettingsNumericValue -Row $row -Delta 4) | Should -BeTrue
+        $row.Value | Should -Be 5
+    }
+
+    It "parses Enter-input for integer settings with clamping" {
+        $row = [pscustomobject]@{ Key = "interceptor_poll_max_seconds"; Type = "int"; Value = 15; Choices = @(); Min = 1; Description = "" }
+        (Update-DashboardSettingsIntegerFromInput -Row $row -InputText "20") | Should -BeTrue
+        $row.Value | Should -Be 20
+        (Update-DashboardSettingsIntegerFromInput -Row $row -InputText "0") | Should -BeTrue
+        $row.Value | Should -Be 1
+        (Update-DashboardSettingsIntegerFromInput -Row $row -InputText "abc") | Should -BeFalse
+        $row.Value | Should -Be 1
+    }
+
+    It "saves selected settings rows and preserves unknown config keys" {
+        $jsonPath = Join-Path -Path $TestDrive -ChildPath "workspaces.json"
+        $workspaces = [pscustomobject]@{
+            _config = [pscustomobject]@{
+                console_style = "Normal"
+                enable_interceptors = $true
+                notifications = $true
+                interceptor_poll_max_seconds = 15
+                shortcut_prefix_start = "!Start-"
+                shortcut_prefix_stop = "!Stop-"
+                untouched_key = "keep"
+            }
+            Hardware_Definitions = [pscustomobject]@{}
+            System_Modes = [pscustomobject]@{}
+            App_Workloads = [pscustomobject]@{}
+        }
+        $rows = @(Get-DashboardSettingsRows -Workspaces $workspaces)
+        (@($rows | Where-Object { $_.Key -eq "notifications" }))[0].Value = $false
+        (@($rows | Where-Object { $_.Key -eq "interceptor_poll_max_seconds" }))[0].Value = 9
+        (@($rows | Where-Object { $_.Key -eq "shortcut_prefix_start" }))[0].Value = "#Go-"
+
+        Save-DashboardConfigSettings -JsonPath $jsonPath -Workspaces $workspaces -SettingsRows $rows
+
+        $saved = Get-Content -Path $jsonPath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved._config.notifications | Should -BeFalse
+        $saved._config.interceptor_poll_max_seconds | Should -Be 9
+        $saved._config.shortcut_prefix_start | Should -Be "#Go-"
+        $saved._config.untouched_key | Should -Be "keep"
+    }
+
+    It "marks settings row as pending when desired differs from current" {
+        $row = [pscustomobject]@{
+            Key = "notifications"
+            Type = "bool"
+            CurrentValue = $true
+            Value = $false
+        }
+
+        (Test-DashboardSettingsRowPending -Row $row) | Should -BeTrue
+        $row.Value = $true
+        (Test-DashboardSettingsRowPending -Row $row) | Should -BeFalse
+    }
+
+    It "requires non-empty value for shortcut prefix settings" {
+        $required = [pscustomobject]@{ Key = "shortcut_prefix_start"; Type = "string"; Value = "!Start-" }
+        $optional = [pscustomobject]@{ Key = "console_style"; Type = "choice"; Value = "Normal" }
+
+        (Test-DashboardSettingRequiresNonEmpty -Row $required) | Should -BeTrue
+        (Test-DashboardSettingRequiresNonEmpty -Row $optional) | Should -BeFalse
+    }
+
+    It "applies string edit input with non-empty validation rules" {
+        $required = [pscustomobject]@{ Key = "shortcut_prefix_stop"; Type = "string"; Value = "!Stop-" }
+        $optional = [pscustomobject]@{ Key = "shortcut_prefix_start_custom"; Type = "string"; Value = "#Go-" }
+
+        $emptyRequired = Apply-DashboardSettingEditInput -Row $required -InputText ""
+        $emptyRequired.Applied | Should -BeFalse
+        $emptyRequired.ValidationError | Should -BeTrue
+        $required.Value | Should -Be "!Stop-"
+
+        $emptyOptional = Apply-DashboardSettingEditInput -Row $optional -InputText ""
+        $emptyOptional.Applied | Should -BeFalse
+        $emptyOptional.ValidationError | Should -BeFalse
+        $optional.Value | Should -Be "#Go-"
     }
 }
 
@@ -355,11 +502,67 @@ Describe "Dashboard Commit Scope Rules" {
 
     It "clears pending hardware queue after commit helper runs" {
         $queue = @{ "Windows_Update" = "OFF" }
+        $pending = @(
+            [pscustomobject]@{
+                Name = "Windows_Update"
+                CurrentState = "ON"
+                DesiredState = "OFF"
+                ProfileType = "Hardware_Override"
+                Action = "Stop"
+            }
+        )
         Mock -CommandName Invoke-WorkspaceCommit -MockWith { }
 
-        Invoke-DashboardCommit -PendingStates @() -PendingHardwareChanges $queue -OrchestratorPath "C:/fake/Orchestrator.ps1"
+        Invoke-DashboardCommit -PendingStates $pending -PendingHardwareChanges $queue -OrchestratorPath "C:\fake\Orchestrator.ps1"
 
         $queue.Keys.Count | Should -Be 0
+    }
+
+    It "runs sync-only orchestrator path when there are no pending states" {
+        $queue = @{}
+        Mock -CommandName Invoke-WorkspaceCommit -MockWith { throw "should not commit workloads" }
+        Mock -CommandName Invoke-OrchestratorScript -MockWith {
+            throw "Fatal: Workspace '__SYNC_ONLY__' not defined in workspaces.json."
+        }
+
+        { Invoke-DashboardCommit -PendingStates @() -PendingHardwareChanges $queue -OrchestratorPath "C:\fake\Orchestrator.ps1" } | Should -Not -Throw
+
+        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly -ParameterFilter {
+            $OrchestratorPath -eq "C:\fake\Orchestrator.ps1" -and
+            $WorkspaceName -eq "__SYNC_ONLY__" -and $Action -eq "Start"
+        }
+        Assert-MockCalled -CommandName Invoke-WorkspaceCommit -Times 0 -Exactly
+    }
+
+    It "persists queued settings during commit" {
+        $queue = @{}
+        $jsonPath = Join-Path -Path $TestDrive -ChildPath "workspaces.json"
+        $workspaces = [pscustomobject]@{
+            _config = [pscustomobject]@{
+                notifications = $true
+            }
+            Hardware_Definitions = [pscustomobject]@{}
+            System_Modes = [pscustomobject]@{}
+            App_Workloads = [pscustomobject]@{}
+        }
+        $settingsRows = @(
+            [pscustomobject]@{
+                Key = "notifications"
+                Type = "bool"
+                CurrentValue = $true
+                Value = $false
+                Choices = @()
+                Min = $null
+            }
+        )
+        Mock -CommandName Invoke-OrchestratorScript -MockWith {
+            throw "Fatal: Workspace '__SYNC_ONLY__' not defined in workspaces.json."
+        }
+
+        Invoke-DashboardCommit -PendingStates @() -PendingHardwareChanges $queue -OrchestratorPath "C:\fake\Orchestrator.ps1" -JsonPath $jsonPath -Workspaces $workspaces -SettingsRows $settingsRows
+
+        $saved = Get-Content -Path $jsonPath -Raw -Encoding utf8 | ConvertFrom-Json
+        $saved._config.notifications | Should -BeFalse
     }
 }
 

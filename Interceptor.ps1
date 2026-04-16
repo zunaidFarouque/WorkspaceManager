@@ -1,0 +1,573 @@
+[CmdletBinding()]
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+. (Join-Path -Path $PSScriptRoot -ChildPath "WorkspaceState.ps1")
+
+$script:ActivationWaitTimeoutSeconds = 30
+$script:ActivationPollIntervalSeconds = 1
+
+function Get-InterceptorWorkspaces {
+    [CmdletBinding()]
+    param()
+
+    $jsonPath = Join-Path -Path $PSScriptRoot -ChildPath "workspaces.json"
+    if (-not (Test-Path -Path $jsonPath -PathType Leaf)) {
+        throw "Fatal: workspaces.json not found."
+    }
+
+    return (Get-Content -Path $jsonPath -Raw -Encoding utf8 | ConvertFrom-Json)
+}
+
+function Get-InterceptorPollMaxSeconds {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [psobject]$Workspaces
+    )
+
+    $defaultSeconds = 15
+    if ($null -eq $Workspaces) {
+        $Workspaces = Get-InterceptorWorkspaces
+    }
+
+    $configObj = $null
+    if ($null -ne $Workspaces) {
+        $configProp = $Workspaces.PSObject.Properties["_config"]
+        if ($null -ne $configProp) {
+            $configObj = $configProp.Value
+        }
+    }
+
+    $capValue = $null
+    if ($null -ne $configObj) {
+        $capProp = $configObj.PSObject.Properties["interceptor_poll_max_seconds"]
+        if ($null -ne $capProp) {
+            $capValue = $capProp.Value
+        }
+    }
+
+    if ($null -eq $capValue) { return $defaultSeconds }
+
+    $parsed = 0
+    $ok = [int]::TryParse([string]$capValue, [ref]$parsed)
+    if (-not $ok -or $parsed -le 0) { return $defaultSeconds }
+    return $parsed
+}
+
+function Resolve-InterceptedWorkload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Workspaces,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetExe
+    )
+
+    $targetLeaf = [System.IO.Path]::GetFileName($TargetExe)
+    foreach ($prop in $Workspaces.App_Workloads.PSObject.Properties) {
+        $workload = $prop.Value
+        $interceptsProp = $workload.PSObject.Properties["intercepts"]
+        if ($null -eq $interceptsProp) { continue }
+
+        foreach ($intercept in @($workload.intercepts)) {
+            $exeRuleNames = @()
+            $interceptRequires = $null
+
+            # Legacy intercept item: string exe name => default requires = whole workload.
+            if ($intercept -is [string]) {
+                if ([string]::IsNullOrWhiteSpace([string]$intercept)) { continue }
+                $exeRuleNames = @([string]$intercept)
+            } else {
+                $exeProp = $intercept.PSObject.Properties["exe"]
+                if ($null -eq $exeProp) { continue }
+                $exeValue = $intercept.exe
+                if ($exeValue -is [System.Array]) {
+                    $exeRuleNames = @($exeValue)
+                } else {
+                    $exeRuleNames = @([string]$exeValue)
+                }
+
+                $requiresProp = $intercept.PSObject.Properties["requires"]
+                if ($null -ne $requiresProp) {
+                    $interceptRequires = $intercept.requires
+                }
+            }
+
+            $matched = $false
+            foreach ($exeCandidate in @($exeRuleNames)) {
+                $exeCandidate = [string]$exeCandidate
+                if ([string]::Equals($exeCandidate, $targetLeaf, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matched = $true
+                    break
+                }
+            }
+
+            if (-not $matched) { continue }
+
+            $defaultServices = @($workload.services)
+            $defaultExecutables = @($workload.executables)
+
+            # Resolver semantics:
+            # - legacy string intercept items: default to whole workload services/executables.
+            # - rule-object intercept items with a `requires` object:
+            #   missing `requires.executables` means "no executables" (avoid starting OneDrive).
+            $requiredServices = $defaultServices
+            $requiredExecutables = $defaultExecutables
+
+            if ($null -ne $interceptRequires) {
+                $requiredServices = @()
+                $requiredExecutables = @()
+
+                if ($interceptRequires.PSObject.Properties["services"] -ne $null) {
+                    $requiredServices = @($interceptRequires.services)
+                }
+                if ($interceptRequires.PSObject.Properties["executables"] -ne $null) {
+                    $requiredExecutables = @($interceptRequires.executables)
+                }
+            }
+
+            return [pscustomobject]@{
+                Name                 = [string]$prop.Name
+                Workload             = $workload
+                RequiredServices     = @($requiredServices)
+                RequiredExecutables  = @($requiredExecutables)
+            }
+        }
+    }
+
+    return $null
+}
+
+function Test-InterceptorRuleActive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredServices,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredExecutables
+    )
+
+    foreach ($serviceName in @($RequiredServices)) {
+        $svc = [string]$serviceName
+        if ([string]::IsNullOrWhiteSpace($svc)) { continue }
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($null -eq $s -or ($s.Status -ne "Running" -and $s.Status -ne "StartPending")) { return $false }
+    }
+
+    foreach ($executionToken in @($RequiredExecutables)) {
+        $t = [string]$executionToken
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        $isRunning = Get-ExecutableIsRunning -ExecutionToken $t
+        if (-not $isRunning) { return $false }
+    }
+
+    return $true
+}
+
+function Show-InterceptorPrompt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetExe,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkloadName,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$FullServices,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$FullExecutables,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredServices,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredExecutables
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms
+
+    function Format-List {
+        param([string[]]$Items)
+        $clean = @($Items | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($clean.Count -eq 0) { return "(none)" }
+        return ($clean -join ", ")
+    }
+
+    $fullExecDisplay = @()
+    foreach ($t in @($FullExecutables)) {
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        # Convert token to a display name (leaf exe). Best-effort only.
+        try { $fullExecDisplay += Get-ExecutionTokenDisplayName -ExecutionToken ([string]$t) } catch { $fullExecDisplay += [string]$t }
+    }
+    $reqExecDisplay = @()
+    foreach ($t in @($RequiredExecutables)) {
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        try { $reqExecDisplay += Get-ExecutionTokenDisplayName -ExecutionToken ([string]$t) } catch { $reqExecDisplay += [string]$t }
+    }
+
+    $message = @"
+The application '$TargetExe' requires the '$WorkloadName' workload.
+It is currently inactive.
+
+What do you want to enable?
+
+REQUIRED-only (No):
+  Services: $(Format-List -Items $RequiredServices)
+  Executables: $(Format-List -Items $reqExecDisplay)
+
+FULL workload (Yes):
+  Services: $(Format-List -Items $FullServices)
+  Executables: $(Format-List -Items $fullExecDisplay)
+"@
+
+    # Yes => FULL, No => REQUIRED-only, Cancel => decline.
+    $result = [System.Windows.Forms.MessageBox]::Show(
+        $message,
+        "WorkspaceManager",
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2 # Button2 == "No"
+    )
+
+    switch ([string]$result) {
+        "Yes" { return "Yes" }
+        "No" { return "No" }
+        default { return "Cancel" }
+    }
+}
+
+function Start-RuleActivationFlow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredServices,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredExecutables,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkloadName
+    )
+
+    foreach ($serviceName in @($RequiredServices)) {
+        $svc = [string]$serviceName
+        if ([string]::IsNullOrWhiteSpace($svc)) { continue }
+        gsudo Start-Service -Name $svc 2>&1 | Out-Null
+    }
+
+    # Open a short observation window so you can see services turning on.
+    # The interceptor runs from `Interceptor.vbs` with hidden PowerShell, so this is the visible UX.
+    $dashboardPath = Join-Path -Path $PSScriptRoot -ChildPath "Dashboard.ps1"
+    $arguments = @("-ExecutionPolicy", "Bypass", "-File", $dashboardPath, "-ObserveWorkloadName", $WorkloadName, "-ObserveSeconds", "10")
+    Start-Process -FilePath "pwsh.exe" -ArgumentList $arguments 2>&1 | Out-Null
+
+    foreach ($executionToken in @($RequiredExecutables)) {
+        $token = [string]$executionToken
+        if ([string]::IsNullOrWhiteSpace($token)) { continue }
+
+        $runAsAdmin = $false
+        if ($token -like "admin:*") {
+            $runAsAdmin = $true
+            $token = $token.Substring("admin:".Length)
+        }
+
+        $resolvedToken = Resolve-QuotedRelativeExecutionToken -ExecutionToken $token
+        $filePath = $resolvedToken
+        $argumentList = ""
+        if ($resolvedToken -match "^'(.*?)'\s*(.*)$") {
+            $filePath = $matches[1]
+            $argumentList = $matches[2]
+        }
+        $filePath = Resolve-RepoRelativeFilePath -Path $filePath
+        $filePath = [System.IO.Path]::GetFullPath($filePath)
+
+        if ($runAsAdmin) {
+            # Start elevated without a visible console.
+            $cmd = if ([string]::IsNullOrWhiteSpace($argumentList)) {
+                "Start-Process -FilePath `"$filePath`""
+            } else {
+                $escaped = $argumentList.Replace('"', '`"')
+                "Start-Process -FilePath `"$filePath`" -ArgumentList `"$escaped`""
+            }
+            gsudo pwsh.exe -NoProfile -WindowStyle Hidden -Command $cmd 2>&1 | Out-Null
+        } else {
+            if ([string]::IsNullOrWhiteSpace($argumentList)) {
+                Start-Process -FilePath $filePath 2>&1 | Out-Null
+            } else {
+                Start-Process -FilePath $filePath -ArgumentList $argumentList 2>&1 | Out-Null
+            }
+        }
+    }
+}
+
+function Wait-ForInterceptorRuleActive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredServices,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredExecutables,
+        [Parameter(Mandatory = $false)]
+        [int]$MaxSeconds,
+        [Parameter(Mandatory = $false)]
+        [int]$PollIntervalSeconds
+    )
+
+    # With value-typed parameters, PowerShell can default unbound values (e.g. to 0).
+    # Use $PSBoundParameters to decide whether to apply the script defaults.
+    if ($PSBoundParameters.ContainsKey("MaxSeconds")) {
+        $MaxSeconds = [int]$MaxSeconds
+    } else {
+        $MaxSeconds = [int]$script:ActivationWaitTimeoutSeconds
+    }
+
+    if ($PSBoundParameters.ContainsKey("PollIntervalSeconds")) {
+        $PollIntervalSeconds = [int]$PollIntervalSeconds
+    } else {
+        $PollIntervalSeconds = [int]$script:ActivationPollIntervalSeconds
+    }
+
+    if ($PollIntervalSeconds -lt 0) { $PollIntervalSeconds = 0 }
+
+    if ($MaxSeconds -le 0) {
+        return (Test-InterceptorRuleActive -RequiredServices $RequiredServices -RequiredExecutables $RequiredExecutables)
+    }
+
+    $deadline = (Get-Date).AddSeconds($MaxSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-InterceptorRuleActive -RequiredServices $RequiredServices -RequiredExecutables $RequiredExecutables) {
+            return $true
+        }
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+    return $false
+}
+
+function Invoke-InterceptorReadinessPoll {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredServices,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequiredExecutables,
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkloadName
+    )
+
+    $configuredCapSeconds = [int](Get-InterceptorPollMaxSeconds)
+    if ($configuredCapSeconds -le 0) { $configuredCapSeconds = 15 }
+
+    # Hard cap readiness polling to 15s (per requirement), but still respect the
+    # existing script defaults for tests and local overrides via ActivationWaitTimeoutSeconds.
+    $effectiveMaxSeconds = [int]$script:ActivationWaitTimeoutSeconds
+    $effectiveMaxSeconds = [Math]::Min($effectiveMaxSeconds, $configuredCapSeconds)
+    $effectiveMaxSeconds = [Math]::Min($effectiveMaxSeconds, 15)
+
+    $pollIntervalSeconds = [int]$script:ActivationPollIntervalSeconds
+
+    if ([string]$env:WorkspaceManager_InProcPolling -eq "1") {
+        return (Wait-ForInterceptorRuleActive `
+            -RequiredServices $RequiredServices `
+            -RequiredExecutables $RequiredExecutables `
+            -MaxSeconds $effectiveMaxSeconds `
+            -PollIntervalSeconds $pollIntervalSeconds)
+    }
+
+    $pollScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "InterceptorPoll.ps1"
+    $requiredServicesJson = (@($RequiredServices) | ConvertTo-Json -Compress)
+    $requiredExecutablesJson = (@($RequiredExecutables) | ConvertTo-Json -Compress)
+
+    $argumentList = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $pollScriptPath,
+        "-WorkloadName", $WorkloadName,
+        "-PollMarker", "WorkspaceManager_InterceptorPoll",
+        "-MaxSeconds", $effectiveMaxSeconds.ToString(),
+        "-PollIntervalSeconds", $pollIntervalSeconds.ToString(),
+        "-RequiredServicesJson", $requiredServicesJson,
+        "-RequiredExecutablesJson", $requiredExecutablesJson
+    )
+
+    $proc = $null
+    try {
+        $proc = Start-Process -FilePath "pwsh.exe" -ArgumentList $argumentList -WindowStyle Hidden -PassThru
+    } catch {
+        return $false
+    }
+
+    $exitCode = 1
+    if ($proc -is [System.Diagnostics.Process]) {
+        $proc.WaitForExit()
+        $exitCode = [int]$proc.ExitCode
+    } elseif ($null -ne $proc -and $proc.PSObject.Properties.Name -contains "ExitCode") {
+        $exitCode = [int]$proc.ExitCode
+    }
+
+    return ($exitCode -eq 0)
+}
+
+function Invoke-WithManagedIfeoTemporarilyDisabled {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetExe,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$LaunchBlock
+    )
+
+    $targetLeaf = [System.IO.Path]::GetFileName($TargetExe)
+    if ([string]::IsNullOrWhiteSpace($targetLeaf)) {
+        & $LaunchBlock
+        return
+    }
+
+    $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$targetLeaf"
+    $managedHook = $false
+    $debuggerValue = $null
+    $managedValue = $null
+
+    try {
+        $props = Get-ItemProperty -Path $ifeoPath -ErrorAction SilentlyContinue
+        if ($null -ne $props) {
+            $debuggerValue = [string]$props.Debugger
+            $managedValue = [string]$props.WorkspaceManager_Managed
+            $managedHook = (-not [string]::IsNullOrWhiteSpace($debuggerValue) -and $managedValue -eq "1")
+        }
+    } catch {
+        $managedHook = $false
+    }
+
+    if (-not $managedHook) {
+        & $LaunchBlock
+        return
+    }
+
+    $escapedPath = $ifeoPath.Replace("'", "''")
+    $escapedDebugger = $debuggerValue.Replace("'", "''")
+    $escapedManaged = $managedValue.Replace("'", "''")
+
+    $disableCmd = "Remove-ItemProperty -Path '$escapedPath' -Name 'Debugger' -ErrorAction SilentlyContinue; Remove-ItemProperty -Path '$escapedPath' -Name 'WorkspaceManager_Managed' -ErrorAction SilentlyContinue"
+    $restoreCmd = "New-Item -Path '$escapedPath' -Force | Out-Null; New-ItemProperty -Path '$escapedPath' -Name 'Debugger' -Value '$escapedDebugger' -PropertyType String -Force | Out-Null; New-ItemProperty -Path '$escapedPath' -Name 'WorkspaceManager_Managed' -Value '$escapedManaged' -PropertyType String -Force | Out-Null"
+
+    try {
+        gsudo pwsh.exe -NoProfile -Command $disableCmd 2>&1 | Out-Null
+        & $LaunchBlock
+    } finally {
+        gsudo pwsh.exe -NoProfile -Command $restoreCmd 2>&1 | Out-Null
+    }
+}
+
+function Start-InterceptedApplication {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetExe,
+        [string[]]$TargetArgs = @()
+    )
+
+    if ($null -eq $TargetArgs -or $TargetArgs.Count -eq 0) {
+        Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -LaunchBlock {
+            Start-Process -FilePath $TargetExe | Out-Null
+        }
+        return
+    }
+
+    Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -LaunchBlock {
+        Start-Process -FilePath $TargetExe -ArgumentList $TargetArgs | Out-Null
+    }
+}
+
+function Invoke-Interceptor {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetExe,
+        [string[]]$TargetArgs = @()
+    )
+
+    if ([string]$env:WorkspaceManager_InterceptorBypass -eq "1") {
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        return
+    }
+
+    $workspaces = Get-InterceptorWorkspaces
+    $resolved = Resolve-InterceptedWorkload -Workspaces $workspaces -TargetExe $TargetExe
+    if ($null -eq $resolved) {
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        return
+    }
+
+    if (Test-InterceptorRuleActive -RequiredServices $resolved.RequiredServices -RequiredExecutables $resolved.RequiredExecutables) {
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        return
+    }
+
+    $fullServices = @($resolved.Workload.services)
+    $fullExecutables = @($resolved.Workload.executables)
+
+    $promptResult = Show-InterceptorPrompt `
+        -TargetExe $TargetExe `
+        -WorkloadName $resolved.Name `
+        -FullServices $fullServices `
+        -FullExecutables $fullExecutables `
+        -RequiredServices $resolved.RequiredServices `
+        -RequiredExecutables $resolved.RequiredExecutables
+
+    # Yes => FULL workload, No => REQUIRED-only, Cancel => decline.
+    $activationServices = $resolved.RequiredServices
+    $activationExecutables = $resolved.RequiredExecutables
+
+    switch ($promptResult) {
+        "Yes" {
+            $activationServices = $fullServices
+            $activationExecutables = $fullExecutables
+        }
+        "No" { }
+        default { return }
+    }
+
+    Start-RuleActivationFlow `
+        -RequiredServices $activationServices `
+        -RequiredExecutables $activationExecutables `
+        -WorkloadName $resolved.Name
+
+    $nowActive = Invoke-InterceptorReadinessPoll -RequiredServices $activationServices -RequiredExecutables $activationExecutables -WorkloadName $resolved.Name
+    if ($nowActive) {
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        return
+    }
+
+    # If activation hasn't fully materialized by timeout, still launch.
+    # Launch path handles recursion safety by temporarily disabling managed IFEO.
+    Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+}
+
+if ($MyInvocation.InvocationName -ne ".") {
+    if ($RemainingArgs.Count -eq 0) {
+        exit
+    }
+
+    $TargetExe = $RemainingArgs[0]
+    $TargetArgs = @()
+    if ($RemainingArgs.Count -gt 1) {
+        $TargetArgs = @($RemainingArgs[1..($RemainingArgs.Count - 1)])
+    }
+
+    Invoke-Interceptor -TargetExe $TargetExe -TargetArgs $TargetArgs
+}

@@ -91,6 +91,25 @@ function Get-ExecutionTokenDisplayName {
     return $leaf
 }
 
+function Get-VideoControllerRefreshRates {
+    [CmdletBinding()]
+    param()
+
+    $controllers = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
+    $rates = [System.Collections.Generic.List[int]]::new()
+    foreach ($controller in $controllers) {
+        $rawRate = $controller.CurrentRefreshRate
+        if ($null -eq $rawRate) { continue }
+
+        $rate = 0
+        if (-not [int]::TryParse([string]$rawRate, [ref]$rate)) { continue }
+        if ($rate -le 0) { continue }
+        $rates.Add($rate)
+    }
+
+    return @($rates)
+}
+
 function Get-HardwarePhysicalState {
     param(
         [Parameter(Mandatory = $true)][string]$DefinitionKey,
@@ -149,6 +168,12 @@ function Get-HardwarePhysicalState {
             return $null
         }
         "stateless" {
+            if ($DefinitionKey -eq "Display_High_Refresh_Rate") {
+                $rates = @(Get-VideoControllerRefreshRates)
+                if ($rates.Count -eq 0) { return $null }
+                if (@($rates | Where-Object { $_ -gt 60 }).Count -gt 0) { return "ON" }
+                return "OFF"
+            }
             return $null
         }
         default {

@@ -1,7 +1,9 @@
 {
   "_config": {
     "console_style": "Normal",
+    "enable_interceptors": true,
     "notifications": true,
+    "interceptor_poll_max_seconds": 15,
     "shortcut_prefix_start": "!Start-",
     "shortcut_prefix_stop": "!Stop-"
   },
@@ -17,8 +19,12 @@
     "Windows_Update": {
       "type": "service",
       "name": "wuauserv",
-      "action_override_on": ["'./CustomScripts/WUB-Enable Updates.lnk'"],
-      "action_override_off": ["'./CustomScripts/WUB-Disable Updates.lnk'"]
+      "action_override_on": [
+        "'./CustomScripts/WUB-Enable Updates.lnk'"
+      ],
+      "action_override_off": [
+        "'./CustomScripts/WUB-Disable Updates.lnk'"
+      ]
     },
     "Search_Indexer": {
       "type": "service",
@@ -34,42 +40,66 @@
     },
     "Wi_Fi_Adapter": {
       "type": "pnp_device",
-      "match": ["*Wi-Fi*", "*Wireless*"]
+      "match": [
+        "*Wi-Fi*",
+        "*Wireless*"
+      ]
     },
     "Ethernet_Port": {
       "type": "pnp_device",
-      "match": ["*2.5GbE*"]
+      "match": [
+        "*2.5GbE*"
+      ]
     },
     "Bluetooth_Radio": {
       "type": "pnp_device",
-      "match": ["*Bluetooth*"]
+      "match": [
+        "*Bluetooth*"
+      ]
     },
     "Battery_ACPI": {
       "type": "pnp_device",
-      "match": ["*ACPI*"]
+      "match": [
+        "*ACPI*"
+      ]
     },
     "Unnecessary_Peripherals": {
       "type": "pnp_device",
-      "match": ["*Camera*", "*Webcam*", "*Biometric*", "*Windows Hello*"]
+      "match": [
+        "*Camera*",
+        "*Webcam*",
+        "*Biometric*",
+        "*Windows Hello*"
+      ]
     },
     "Display_High_Refresh_Rate": {
       "type": "stateless",
       "action_override_on": [
         "'./CustomScripts/Set-HighRefreshByMonitorCount.ps1'"
       ],
-      "action_override_off": ["'./CustomScripts/Monitors Refresh 60hz.lnk'"]
+      "action_override_off": [
+        "'./CustomScripts/Monitors Refresh 60hz.lnk'"
+      ]
     },
     "Gigabyte_Control_Center": {
       "type": "process",
       "name": "GCC.exe",
-      "action_override_on": ["'./CustomScripts/Start_GCC.lnk'"],
-      "action_override_off": ["gsudo taskkill /F /IM GCC.exe"]
+      "action_override_on": [
+        "'./CustomScripts/Start_GCC.lnk'"
+      ],
+      "action_override_off": [
+        "gsudo taskkill /F /IM GCC.exe"
+      ]
     },
     "Gigabyte_Fan_Battery_Control": {
       "type": "process",
       "name": "main.exe",
-      "action_override_on": ["'./CustomScripts/Start_GFBC.lnk'"],
-      "action_override_off": ["gsudo taskkill /F /IM main.exe"]
+      "action_override_on": [
+        "'./CustomScripts/Start_GFBC.lnk'"
+      ],
+      "action_override_off": [
+        "gsudo taskkill /F /IM main.exe"
+      ]
     }
   },
   "System_Modes": {
@@ -135,18 +165,44 @@
   "App_Workloads": {
     "DAW_Cubase": {
       "description": "Digital Audio Workstation runtime.",
-      "services": ["Audiosrv"],
-      "executables": ["'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe'"]
+      "services": [
+        "Audiosrv"
+      ],
+      "executables": [
+        "'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe'"
+      ]
     },
     "Office": {
       "description": "Microsoft Office and OneDrive workload.",
-      "services": ["ClickToRunSvc"],
-      "executables": ["'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"]
+      "services": [
+        "ClickToRunSvc"
+      ],
+      "executables": [
+        "'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"
+      ],
+      "intercepts": [
+        {
+          "exe": [
+            "WINWORD.EXE",
+            "EXCEL.EXE",
+            "POWERPNT.EXE"
+          ],
+          "requires": {
+            "services": [
+              "ClickToRunSvc"
+            ]
+          }
+        }
+      ]
     },
     "StarDesk": {
       "description": "StarDesk service and desktop app workload.",
-      "services": ["StarDeskService"],
-      "executables": ["'C:/Program Files/StarDesk/StarDesk.exe'"]
+      "services": [
+        "StarDeskService"
+      ],
+      "executables": [
+        "'C:/Program Files/StarDesk/StarDesk.exe'"
+      ]
     }
   }
 }

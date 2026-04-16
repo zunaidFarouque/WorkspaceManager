@@ -1,0 +1,14 @@
+﻿{"sessionId":"508d45","timestamp":1776354215853,"runId":"winword-1","hypothesisId":"F","location":"Interceptor.ps1:Invoke-Interceptor","message":"enter","data":{"TargetExe":"C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE","BypassEnv":"","TargetArgsCount":0,"PID":17052}}
+
+{"sessionId":"508d45","timestamp":1776354220138,"runId":"winword-1","hypothesisId":"A","location":"Interceptor.ps1:Invoke-Interceptor","message":"prompt result","data":{"WorkloadName":"Office","PID":17052,"PromptResult":"No"}}
+
+{"sessionId":"508d45","timestamp":1776354221649,"runId":"winword-1","hypothesisId":"A","location":"Interceptor.ps1:Invoke-InterceptorReadinessPoll","message":"enter","data":{"WorkloadName":"Office","Env_InProc":"","RequiredServicesCount":1,"RequiredExecutablesCount":0}}
+
+{"sessionId":"508d45","timestamp":1776354221687,"runId":"winword-1","hypothesisId":"B","location":"Interceptor.ps1:Invoke-InterceptorReadinessPoll","message":"path=spawn-worker","data":{"ConfiguredCapSeconds":15,"EffectiveMaxSeconds":15,"PollIntervalSeconds":1}}
+
+{"sessionId":"508d45","timestamp":1776354221718,"runId":"winword-1","hypothesisId":"D","location":"Interceptor.ps1:Invoke-InterceptorReadinessPoll","message":"spawn failed","data":{"Error":"Cannot validate argument on parameter \u0027ArgumentList\u0027. The argument is null, empty, or an element of the argument collection contains a null value. Supply a collection that does not contain any null values and then try the command again."}}
+
+{"sessionId":"508d45","timestamp":1776354221718,"runId":"winword-1","hypothesisId":"F","location":"Interceptor.ps1:Start-InterceptedApplication","message":"launch","data":{"TargetExe":"C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE","BypassEnv":"","TargetArgsCount":0,"PID":17052}}
+
+{"sessionId":"508d45","timestamp":1776354221750,"runId":"winword-1","hypothesisId":"G","location":"Interceptor.ps1:Invoke-WithManagedIfeoTemporarilyDisabled","message":"temporarily disabling managed IFEO","data":{"TargetLeaf":"WINWORD.EXE","ManagedValue":"1","IfeoPath":"HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD.EXE"}}
+

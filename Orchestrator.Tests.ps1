@@ -256,4 +256,111 @@ Describe "Orchestrator Dictionary/Matrix Execution" {
         ($global:gsudoCalls | Where-Object { $_ -match 'Start-Service -Name WSearch' }).Count | Should -Be 0
         Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
     }
+
+    It "syncs managed IFEO debugger hooks when interceptors are enabled" {
+@'
+{
+  "_config": {
+    "enable_interceptors": true
+  },
+  "Hardware_Definitions": {},
+  "System_Modes": {},
+  "App_Workloads": {
+    "DAW_Cubase": {
+      "services": ["Audiosrv"],
+      "executables": ["'C:/Program Files/Steinberg/Cubase 12/Cubase12.exe'"]
+    },
+    "Office": {
+      "services": ["ClickToRunSvc"],
+      "executables": ["'C:/Program Files/Microsoft OneDrive/OneDrive.exe'"],
+      "intercepts": [
+        {
+          "exe": ["WINWORD.EXE", "EXCEL.EXE"],
+          "requires": {
+            "services": ["ClickToRunSvc"],
+            "executables": []
+          }
+        }
+      ]
+    }
+  }
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        $global:gsudoCalls = @()
+        Mock -CommandName gsudo -MockWith {
+            $global:gsudoCalls += ,($args -join " ")
+            "ok"
+        }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-ChildItem -MockWith { @() }
+
+        { & $script:scriptPath -WorkspaceName "Office" -Action "Start" | Out-Null } | Should -Not -Throw
+
+        $encodedCalls = @($global:gsudoCalls | Where-Object { $_ -match '^-?powershell -NoProfile -EncodedCommand ' -or $_ -match '^powershell -NoProfile -EncodedCommand ' })
+        $encodedCalls.Count | Should -BeGreaterThan 0
+
+        $decodedCalls = @(
+            foreach ($call in $encodedCalls) {
+                $encodedValue = ([regex]::Match($call, '-EncodedCommand\s+(\S+)')).Groups[1].Value
+                [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encodedValue))
+            }
+        )
+
+        (@($decodedCalls | Where-Object { $_ -match 'New-Item -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD\.EXE"' })).Count | Should -Be 1
+        (@($decodedCalls | Where-Object { $_ -match 'New-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD\.EXE" -Name "Debugger"' })).Count | Should -Be 1
+        (@($decodedCalls | Where-Object { $_ -match 'New-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD\.EXE" -Name "WorkspaceManager_Managed" -Value "1"' })).Count | Should -Be 1
+        (@($decodedCalls | Where-Object { $_ -match 'Image File Execution Options\\EXCEL\.EXE' })).Count | Should -BeGreaterThan 0
+
+        Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "removes only managed IFEO debugger values when interceptors are disabled" {
+@'
+{
+  "_config": {
+    "enable_interceptors": false
+  },
+  "Hardware_Definitions": {},
+  "System_Modes": {},
+  "App_Workloads": {}
+}
+'@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+        $global:gsudoCalls = @()
+        Mock -CommandName gsudo -MockWith {
+            $global:gsudoCalls += ,($args -join " ")
+            "ok"
+        }
+        Mock -CommandName Start-Process -MockWith { }
+        Mock -CommandName Get-ChildItem -MockWith {
+            @(
+                [pscustomobject]@{ PSChildName = "WINWORD.EXE"; PSPath = "Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\WINWORD.EXE" },
+                [pscustomobject]@{ PSChildName = "notepad.exe"; PSPath = "Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe" }
+            )
+        }
+        Mock -CommandName Get-ItemProperty -MockWith {
+            param([string]$Path)
+            if ($Path -match 'WINWORD\.EXE$') {
+                return [pscustomobject]@{ WorkspaceManager_Managed = "1" }
+            }
+            return [pscustomobject]@{}
+        }
+
+        { & $script:scriptPath -WorkspaceName "MissingTarget" -Action "Start" } | Should -Throw
+
+        $encodedCalls = @($global:gsudoCalls | Where-Object { $_ -match '^-?powershell -NoProfile -EncodedCommand ' -or $_ -match '^powershell -NoProfile -EncodedCommand ' })
+        $decodedCalls = @(
+            foreach ($call in $encodedCalls) {
+                $encodedValue = ([regex]::Match($call, '-EncodedCommand\s+(\S+)')).Groups[1].Value
+                [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encodedValue))
+            }
+        )
+
+        (@($decodedCalls | Where-Object { $_ -match 'Remove-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD\.EXE" -Name "Debugger"' })).Count | Should -Be 1
+        (@($decodedCalls | Where-Object { $_ -match 'Remove-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\WINWORD\.EXE" -Name "WorkspaceManager_Managed"' })).Count | Should -Be 1
+        (@($decodedCalls | Where-Object { $_ -match 'notepad\.exe' })).Count | Should -Be 0
+
+        Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
+    }
 }

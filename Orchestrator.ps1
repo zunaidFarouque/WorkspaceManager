@@ -60,15 +60,28 @@ try {
 }
 
 $showNotifications = $false
+$enableInterceptors = $false
 $configProperty = $workspaces.PSObject.Properties["_config"]
 if ($null -ne $configProperty) {
     $notificationsProperty = $configProperty.Value.PSObject.Properties["notifications"]
     if ($null -ne $notificationsProperty -and $notificationsProperty.Value -eq $true) {
         $showNotifications = $true
     }
+    $interceptorsProperty = $configProperty.Value.PSObject.Properties["enable_interceptors"]
+    if ($null -ne $interceptorsProperty -and $interceptorsProperty.Value -eq $true) {
+        $enableInterceptors = $true
+    }
 }
 
 $script:ExecutionWaitTimeoutMs = 15000
+$script:IfeoRegistryRoot = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
+
+function Invoke-ElevatedPowerShell {
+    param([Parameter(Mandatory)][string]$Command)
+
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
+    gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1 | Out-Null
+}
 
 function Wait-ProcessWithTimeout {
     param(
@@ -268,7 +281,7 @@ function Invoke-HardwareDefinitionTransition {
     if ($null -ne $overrideEntries -and $overrideEntries.Count -gt 0) {
         foreach ($entry in $overrideEntries) {
             if ([string]::IsNullOrWhiteSpace([string]$entry)) { continue }
-            Invoke-ExecutionToken -ExecutionToken ([string]$entry -replace "^'+|'+$", "") -Wait
+            Invoke-ExecutionToken -ExecutionToken ([string]$entry) -Wait
         }
         return
     }
@@ -312,12 +325,99 @@ function Invoke-HardwareDefinitionTransition {
     }
 }
 
+function Sync-Interceptors {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][psobject]$Workspaces,
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+
+    $ifeoRoot = $script:IfeoRegistryRoot
+    if (-not $Enabled) {
+        $removedCount = 0
+        $existingKeys = @(Get-ChildItem -Path $ifeoRoot -ErrorAction SilentlyContinue)
+        foreach ($key in $existingKeys) {
+            $managed = Get-ItemProperty -Path $key.PSPath -Name "WorkspaceManager_Managed" -ErrorAction SilentlyContinue
+            if ($null -eq $managed -or [string]$managed.WorkspaceManager_Managed -ne "1") {
+                continue
+            }
+
+            $escapedPath = ($ifeoRoot + "\" + $key.PSChildName).Replace('"', '""')
+            Invoke-ElevatedPowerShell -Command "Remove-ItemProperty -Path `"$escapedPath`" -Name `"Debugger`" -ErrorAction SilentlyContinue; Remove-ItemProperty -Path `"$escapedPath`" -Name `"WorkspaceManager_Managed`" -ErrorAction SilentlyContinue"
+            $removedCount++
+        }
+        return [pscustomobject]@{
+            Enabled      = $false
+            AddedCount   = 0
+            RemovedCount = $removedCount
+        }
+    }
+
+    $addedCount = 0
+    $wrapperPath = Join-Path -Path $PSScriptRoot -ChildPath "Interceptor.vbs"
+    $wrapperPath = [System.IO.Path]::GetFullPath($wrapperPath)
+    $debuggerValue = ('wscript.exe "{0}"' -f $wrapperPath).Replace('"', '`"')
+
+    foreach ($workloadProp in $Workspaces.App_Workloads.PSObject.Properties) {
+        $interceptsProp = $workloadProp.Value.PSObject.Properties["intercepts"]
+        if ($null -eq $interceptsProp) { continue }
+
+        foreach ($intercept in @($workloadProp.Value.intercepts)) {
+            # Support legacy string intercepts and new intercept-rule objects.
+            $exeNames = @()
+            if ($intercept -is [string]) {
+                $exeNames = @($intercept)
+            } else {
+                $exeProp = $intercept.PSObject.Properties["exe"]
+                if ($null -eq $exeProp) { continue }
+                $exeValue = $intercept.exe
+                if ($exeValue -is [System.Array]) {
+                    $exeNames = @($exeValue)
+                } else {
+                    $exeNames = @([string]$exeValue)
+                }
+            }
+
+            foreach ($exeName in @($exeNames)) {
+                $exeName = [string]$exeName
+                if ([string]::IsNullOrWhiteSpace($exeName)) { continue }
+
+                $ifeoPath = ($ifeoRoot + "\" + $exeName).Replace('"', '""')
+                $command = @"
+New-Item -Path "$ifeoPath" -Force | Out-Null
+New-ItemProperty -Path "$ifeoPath" -Name "Debugger" -Value "$debuggerValue" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path "$ifeoPath" -Name "WorkspaceManager_Managed" -Value "1" -PropertyType String -Force | Out-Null
+"@
+                Invoke-ElevatedPowerShell -Command $command
+                $addedCount++
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Enabled      = $true
+        AddedCount   = $addedCount
+        RemovedCount = 0
+    }
+}
+
 # Phase 1 routing: resolve profile type and data
 $resolvedProfileType = $null
 $resolvedProfileData = $null
 $systemModesProperty = $workspaces.PSObject.Properties["System_Modes"]
 $appWorkloadsProperty = $workspaces.PSObject.Properties["App_Workloads"]
 $hardwareDefsProperty = $workspaces.PSObject.Properties["Hardware_Definitions"]
+
+if ($null -ne $configProperty) {
+    $interceptorSync = Sync-Interceptors -Workspaces $workspaces -Enabled:$enableInterceptors
+    if ($null -ne $interceptorSync) {
+        if ($interceptorSync.Enabled) {
+            Write-Host "Interceptors: synced $($interceptorSync.AddedCount) managed IFEO hook(s)."
+        } else {
+            Write-Host "Interceptors: cleaned $($interceptorSync.RemovedCount) managed IFEO hook(s)."
+        }
+    }
+}
 
 if (-not [string]::IsNullOrWhiteSpace($ProfileType)) {
     if ($ProfileType -eq "Hardware_Override") {

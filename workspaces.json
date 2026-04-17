@@ -72,7 +72,7 @@
         "*ACPI*"
       ]
     },
-    "Unnecessary_Peripherals": {
+    "Other_Peripherals": {
       "description": "Optional camera and biometric peripherals that can be disabled in focused modes.",
       "type": "pnp_device",
       "match": [

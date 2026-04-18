@@ -1,0 +1,182 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<test-results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="nunit_schema_2.5.xsd" name="Pester" total="101" errors="0" failures="0" not-run="0" inconclusive="0" ignored="0" skipped="0" invalid="0" date="2026-04-18" time="18:41:18">
+  <environment user="Zunaid" clr-version="10.0.5" cwd="D:\_installed\VScode repos\BG-Services-Orchestrator" machine-name="ZUNAID-LAPTOP" platform="Microsoft Windows 11 IoT Enterprise LTSC|C:\WINDOWS|\Device\Harddisk0\Partition3" user-domain="ZUNAID-LAPTOP" nunit-version="2.5.8.0" os-version="10.0.26100" />
+  <culture-info current-culture="en-US" current-uiculture="en-US" />
+  <test-suite type="TestFixture" name="Pester" executed="True" result="Success" success="True" time="23.4209" asserts="0" description="Pester">
+    <results>
+      <test-suite type="TestFixture" name="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Dashboard.Tests.ps1" executed="True" result="Success" success="True" time="5.2465" asserts="0" description="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Dashboard.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Dashboard Phase 3 Commit Engine" executed="True" result="Success" success="True" time="0.8839" asserts="0" description="Dashboard Phase 3 Commit Engine">
+            <results>
+              <test-case description="invokes orchestrator only for workload and mode entries with desired delta" name="Dashboard Phase 3 Commit Engine.invokes orchestrator only for workload and mode entries with desired delta" time="0.7339" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Phase 3 Desired-State Toggle" executed="True" result="Success" success="True" time="1.171" asserts="0" description="Dashboard Phase 3 Desired-State Toggle">
+            <results>
+              <test-case description="toggles Active/Inactive for non-mixed current state" name="Dashboard Phase 3 Desired-State Toggle.toggles Active/Inactive for non-mixed current state" time="0.0842" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="toggles only Active/Inactive when current state is Mixed" name="Dashboard Phase 3 Desired-State Toggle.toggles only Active/Inactive when current state is Mixed" time="0.0186" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="allows toggling when current and desired are empty" name="Dashboard Phase 3 Desired-State Toggle.allows toggling when current and desired are empty" time="0.0599" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="renders empty state text without throwing" name="Dashboard Phase 3 Desired-State Toggle.renders empty state text without throwing" time="0.0476" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="hides Inactive text in Tab 2 display" name="Dashboard Phase 3 Desired-State Toggle.hides Inactive text in Tab 2 display" time="0.025" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Phase 3 Post-Commit Messaging" executed="True" result="Success" success="True" time="1.3345" asserts="0" description="Dashboard Phase 3 Post-Commit Messaging">
+            <results>
+              <test-case description="harvests post-change and action-specific messages from System_Modes path" name="Dashboard Phase 3 Post-Commit Messaging.harvests post-change and action-specific messages from System_Modes path" time="0.0521" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="harvests hardware post-stop message from Hardware_Definitions path" name="Dashboard Phase 3 Post-Commit Messaging.harvests hardware post-stop message from Hardware_Definitions path" time="0.0282" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="returns empty messages when UIStates is empty" name="Dashboard Phase 3 Post-Commit Messaging.returns empty messages when UIStates is empty" time="0.0221" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Tab 3 Manual Override Console" executed="True" result="Success" success="True" time="1.6798" asserts="0" description="Dashboard Tab 3 Manual Override Console">
+            <results>
+              <test-case description="toggles ON and OFF desired state for manual hardware override rows" name="Dashboard Tab 3 Manual Override Console.toggles ON and OFF desired state for manual hardware override rows" time="0.0227" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="marks pending manual override rows with pending color and state" name="Dashboard Tab 3 Manual Override Console.marks pending manual override rows with pending color and state" time="0.0481" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="commits hardware override rows through Hardware_Override profile type" name="Dashboard Tab 3 Manual Override Console.commits hardware override rows through Hardware_Override profile type" time="0.1288" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="persists active system mode intent to state json" name="Dashboard Tab 3 Manual Override Console.persists active system mode intent to state json" time="0.0618" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="bootstraps state json when missing" name="Dashboard Tab 3 Manual Override Console.bootstraps state json when missing" time="0.0261" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Tab 2/3 Queue Workflow" executed="True" result="Success" success="True" time="2.0104" asserts="0" description="Dashboard Tab 2/3 Queue Workflow">
+            <results>
+              <test-case description="queues ideal targets for compliance violations only" name="Dashboard Tab 2/3 Queue Workflow.queues ideal targets for compliance violations only" time="0.0273" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="toggles queue entry state between ON and OFF" name="Dashboard Tab 2/3 Queue Workflow.toggles queue entry state between ON and OFF" time="0.044" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="clears queue entry for selected component" name="Dashboard Tab 2/3 Queue Workflow.clears queue entry for selected component" time="0.0185" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="shows queued row with queued status and yellow color" name="Dashboard Tab 2/3 Queue Workflow.shows queued row with queued status and yellow color" time="0.0226" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="shows blueprint target in Desired for non-queued violation rows" name="Dashboard Tab 2/3 Queue Workflow.shows blueprint target in Desired for non-queued violation rows" time="0.0202" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="normalizes ANY targets to empty Desired by default" name="Dashboard Tab 2/3 Queue Workflow.normalizes ANY targets to empty Desired by default" time="0.0244" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="keeps Desired tied to blueprint target even when queued differs" name="Dashboard Tab 2/3 Queue Workflow.keeps Desired tied to blueprint target even when queued differs" time="0.0217" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="uses compact symbols for compliant and ignored rows" name="Dashboard Tab 2/3 Queue Workflow.uses compact symbols for compliant and ignored rows" time="0.0161" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="renders tab-specific footer action text" name="Dashboard Tab 2/3 Queue Workflow.renders tab-specific footer action text" time="0.0517" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="sets active blueprint immediately and updates mode rows" name="Dashboard Tab 2/3 Queue Workflow.sets active blueprint immediately and updates mode rows" time="0.0353" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Tab 4 Settings" executed="True" result="Success" success="True" time="3.0631" asserts="0" description="Dashboard Tab 4 Settings">
+            <results>
+              <test-case description="returns settings as active array for tab 4" name="Dashboard Tab 4 Settings.returns settings as active array for tab 4" time="0.0301" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="builds tab 4 rows with section separator and action rows" name="Dashboard Tab 4 Settings.builds tab 4 rows with section separator and action rows" time="0.034" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="loads configured settings rows and provides descriptions" name="Dashboard Tab 4 Settings.loads configured settings rows and provides descriptions" time="0.0851" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="reports startup logo disabled only when _config.disable_startup_logo is true" name="Dashboard Tab 4 Settings.reports startup logo disabled only when _config.disable_startup_logo is true" time="0.02" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="toggles bool and cycles choice on space" name="Dashboard Tab 4 Settings.toggles bool and cycles choice on space" time="0.03" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="updates numeric setting with floor validation" name="Dashboard Tab 4 Settings.updates numeric setting with floor validation" time="0.0285" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="parses Enter-input for integer settings with clamping" name="Dashboard Tab 4 Settings.parses Enter-input for integer settings with clamping" time="0.0245" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="saves selected settings rows and preserves unknown config keys" name="Dashboard Tab 4 Settings.saves selected settings rows and preserves unknown config keys" time="0.0692" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="global interceptor reset disables setting and commits sync-only cleanup" name="Dashboard Tab 4 Settings.global interceptor reset disables setting and commits sync-only cleanup" time="0.237" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="kills only interceptor helper shell processes during emergency cleanup" name="Dashboard Tab 4 Settings.kills only interceptor helper shell processes during emergency cleanup" time="0.2335" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="marks settings row as pending when desired differs from current" name="Dashboard Tab 4 Settings.marks settings row as pending when desired differs from current" time="0.0143" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="does not treat action rows as pending settings rows" name="Dashboard Tab 4 Settings.does not treat action rows as pending settings rows" time="0.0118" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="shows confirm text only when action is armed" name="Dashboard Tab 4 Settings.shows confirm text only when action is armed" time="0.0159" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="requires Enter twice to execute a tab 4 action row" name="Dashboard Tab 4 Settings.requires Enter twice to execute a tab 4 action row" time="0.0247" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="blocks action execution when there are pending setting changes" name="Dashboard Tab 4 Settings.blocks action execution when there are pending setting changes" time="0.0165" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="dispatches Reset_Interceptors action through action dispatcher" name="Dashboard Tab 4 Settings.dispatches Reset_Interceptors action through action dispatcher" time="0.0767" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="requires non-empty value for shortcut prefix settings" name="Dashboard Tab 4 Settings.requires non-empty value for shortcut prefix settings" time="0.0148" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="applies string edit input with non-empty validation rules" name="Dashboard Tab 4 Settings.applies string edit input with non-empty validation rules" time="0.0323" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Commit Scope Rules" executed="True" result="Success" success="True" time="3.4444" asserts="0" description="Dashboard Commit Scope Rules">
+            <results>
+              <test-case description="builds commit states from workload deltas and queued hardware only" name="Dashboard Commit Scope Rules.builds commit states from workload deltas and queued hardware only" time="0.0348" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="clears pending hardware queue after commit helper runs" name="Dashboard Commit Scope Rules.clears pending hardware queue after commit helper runs" time="0.1461" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="runs sync-only orchestrator path when there are no pending states" name="Dashboard Commit Scope Rules.runs sync-only orchestrator path when there are no pending states" time="0.0879" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="persists queued settings during commit" name="Dashboard Commit Scope Rules.persists queued settings during commit" time="0.0615" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Workload Detail Modes" executed="True" result="Success" success="True" time="3.6685" asserts="0" description="Dashboard Workload Detail Modes">
+            <results>
+              <test-case description="cycles detail mode in the expected order" name="Dashboard Workload Detail Modes.cycles detail mode in the expected order" time="0.0207" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="toggles detail mode only on workload tab when tilde is pressed" name="Dashboard Workload Detail Modes.toggles detail mode only on workload tab when tilde is pressed" time="0.0285" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="renders details by mode rules" name="Dashboard Workload Detail Modes.renders details by mode rules" time="0.0194" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="builds compact detail rows with svc/exe labels and runtime flags" name="Dashboard Workload Detail Modes.builds compact detail rows with svc/exe labels and runtime flags" time="0.0442" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="formats mixed status with check counts only for mixed rows" name="Dashboard Workload Detail Modes.formats mixed status with check counts only for mixed rows" time="0.0245" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="includes detail mode hint in tab 1 footer only" name="Dashboard Workload Detail Modes.includes detail mode hint in tab 1 footer only" time="0.0385" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Workload Group Label Formatting" executed="True" result="Success" success="True" time="3.7666" asserts="0" description="Dashboard Workload Group Label Formatting">
+            <results>
+              <test-case description="pads short domain names to 8 characters inside brackets" name="Dashboard Workload Group Label Formatting.pads short domain names to 8 characters inside brackets" time="0.0253" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="truncates long domain names to 8 characters inside brackets" name="Dashboard Workload Group Label Formatting.truncates long domain names to 8 characters inside brackets" time="0.0129" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="falls back to plain name when domain is empty" name="Dashboard Workload Group Label Formatting.falls back to plain name when domain is empty" time="0.0117" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Workload Filtering and Viewport" executed="True" result="Success" success="True" time="3.973" asserts="0" description="Dashboard Workload Filtering and Viewport">
+            <results>
+              <test-case description="filters workloads by domain, favorites, mixed, and search query" name="Dashboard Workload Filtering and Viewport.filters workloads by domain, favorites, mixed, and search query" time="0.0364" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="hides hidden workloads unless query explicitly matches" name="Dashboard Workload Filtering and Viewport.hides hidden workloads unless query explicitly matches" time="0.0165" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="returns viewport range centered around cursor when possible" name="Dashboard Workload Filtering and Viewport.returns viewport range centered around cursor when possible" time="0.0564" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="cycles domain filter across all groups and back to all" name="Dashboard Workload Filtering and Viewport.cycles domain filter across all groups and back to all" time="0.0472" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="Dashboard Commit Return Mode" executed="True" result="Success" success="True" time="4.3332" asserts="0" description="Dashboard Commit Return Mode">
+            <results>
+              <test-case description="uses Exit as the default commit mode" name="Dashboard Commit Return Mode.uses Exit as the default commit mode" time="0.0103" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="toggles commit mode between Exit and Return" name="Dashboard Commit Return Mode.toggles commit mode between Exit and Return" time="0.0172" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="formats commit mode indicator text" name="Dashboard Commit Return Mode.formats commit mode indicator text" time="0.0119" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="includes commit mode text in tab footer output" name="Dashboard Commit Return Mode.includes commit mode text in tab footer output" time="0.0143" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="returns Exit immediately when commit mode is Exit" name="Dashboard Commit Return Mode.returns Exit immediately when commit mode is Exit" time="0.0137" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="returns ReturnToDashboard when commit mode is Return and non-escape key is pressed" name="Dashboard Commit Return Mode.returns ReturnToDashboard when commit mode is Return and non-escape key is pressed" time="0.0191" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="returns Exit when commit mode is Return and escape key is pressed" name="Dashboard Commit Return Mode.returns Exit when commit mode is Return and escape key is pressed" time="0.0168" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="keeps commit sequence intact in Return mode" name="Dashboard Commit Return Mode.keeps commit sequence intact in Return mode" time="0.2059" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Interceptor.Tests.ps1" executed="True" result="Success" success="True" time="14.7498" asserts="0" description="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Interceptor.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Interceptor workload resolution and flow" executed="True" result="Success" success="True" time="14.6049" asserts="0" description="Interceptor workload resolution and flow">
+            <results>
+              <test-case description="resolves intercepted workload by exe name case-insensitively" name="Interceptor workload resolution and flow.resolves intercepted workload by exe name case-insensitively" time="0.0645" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="rule active ignores non-required executables when requires.executables is empty" name="Interceptor workload resolution and flow.rule active ignores non-required executables when requires.executables is empty" time="0.1609" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="treats StartPending as active for required services" name="Interceptor workload resolution and flow.treats StartPending as active for required services" time="0.0793" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Get-InterceptorPollMaxSeconds defaults to 15 when config is missing" name="Interceptor workload resolution and flow.Get-InterceptorPollMaxSeconds defaults to 15 when config is missing" time="0.021" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Get-InterceptorPollMaxSeconds reads interceptor_poll_max_seconds when present" name="Interceptor workload resolution and flow.Get-InterceptorPollMaxSeconds reads interceptor_poll_max_seconds when present" time="0.0158" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="skips workloads that omit intercepts (does not throw)" name="Interceptor workload resolution and flow.skips workloads that omit intercepts (does not throw)" time="0.0215" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="launches target immediately when workload is already active" name="Interceptor workload resolution and flow.launches target immediately when workload is already active" time="3.8603" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="prompts and activates REQUIRED-only before launching target when user selects No" name="Interceptor workload resolution and flow.prompts and activates REQUIRED-only before launching target when user selects No" time="2.3935" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="exits without launching target when user selects Cancel" name="Interceptor workload resolution and flow.exits without launching target when user selects Cancel" time="0.0898" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="bypasses prompting when WorkspaceManager_InterceptorBypass=1" name="Interceptor workload resolution and flow.bypasses prompting when WorkspaceManager_InterceptorBypass=1" time="1.9544" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="waits for required-only activation before launching when user selects No" name="Interceptor workload resolution and flow.waits for required-only activation before launching when user selects No" time="2.2139" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="launches when required-only activation never becomes active" name="Interceptor workload resolution and flow.launches when required-only activation never becomes active" time="2.0919" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="spawns InterceptorPoll worker in spawn mode with max seconds and poll marker" name="Interceptor workload resolution and flow.spawns InterceptorPoll worker in spawn mode with max seconds and poll marker" time="1.3907" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="activates FULL workload when user selects Yes" name="Interceptor workload resolution and flow.activates FULL workload when user selects Yes" time="0.1096" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Orchestrator.Tests.ps1" executed="True" result="Success" success="True" time="2.2374" asserts="0" description="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\Orchestrator.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Orchestrator Dictionary/Matrix Execution" executed="True" result="Success" success="True" time="1.9439" asserts="0" description="Orchestrator Dictionary/Matrix Execution">
+            <results>
+              <test-case description="starts an App_Workload and executes executable strings" name="Orchestrator Dictionary/Matrix Execution.starts an App_Workload and executes executable strings" time="0.2354" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="starts a System_Mode and formats Disable-PnpDevice EncodedCommand for OFF target" name="Orchestrator Dictionary/Matrix Execution.starts a System_Mode and formats Disable-PnpDevice EncodedCommand for OFF target" time="0.1617" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="uses action_override_off instead of native command when desired state is OFF" name="Orchestrator Dictionary/Matrix Execution.uses action_override_off instead of native command when desired state is OFF" time="0.1356" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="routes Hardware_Override to a single hardware component and uses override action" name="Orchestrator Dictionary/Matrix Execution.routes Hardware_Override to a single hardware component and uses override action" time="0.1255" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="uses native Hardware_Override pnp command when no action override is defined" name="Orchestrator Dictionary/Matrix Execution.uses native Hardware_Override pnp command when no action override is defined" time="0.1407" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="skips Hardware_Override execution when target_state is ANY" name="Orchestrator Dictionary/Matrix Execution.skips Hardware_Override execution when target_state is ANY" time="0.1158" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="hardware override stop action maps directly to OFF for service targets" name="Orchestrator Dictionary/Matrix Execution.hardware override stop action maps directly to OFF for service targets" time="0.1298" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="skips interceptor sync when SkipInterceptorSync is provided" name="Orchestrator Dictionary/Matrix Execution.skips interceptor sync when SkipInterceptorSync is provided" time="0.1277" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="syncs managed IFEO debugger hooks when interceptors are enabled" name="Orchestrator Dictionary/Matrix Execution.syncs managed IFEO debugger hooks when interceptors are enabled" time="0.2173" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="removes only managed IFEO debugger values when interceptors are disabled" name="Orchestrator Dictionary/Matrix Execution.removes only managed IFEO debugger values when interceptors are disabled" time="0.2199" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="removes managed legacy hooks even when owner metadata is missing" name="Orchestrator Dictionary/Matrix Execution.removes managed legacy hooks even when owner metadata is missing" time="0.1647" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="does not remove managed hooks owned by a different owner tag" name="Orchestrator Dictionary/Matrix Execution.does not remove managed hooks owned by a different owner tag" time="0.1587" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\WorkspaceState.Tests.ps1" executed="True" result="Success" success="True" time="1.1872" asserts="0" description="D:\_installed\VScode repos\BG-Services-Orchestrator\tests\WorkspaceState.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Workspace State Engine (Declarative Matrix)" executed="True" result="Success" success="True" time="1.0597" asserts="0" description="Workspace State Engine (Declarative Matrix)">
+            <results>
+              <test-case description="marks App_Workload as Active when all declared checks are running" name="Workspace State Engine (Declarative Matrix).marks App_Workload as Active when all declared checks are running" time="0.2782" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="captures mixed runtime details for workloads with partial matches" name="Workspace State Engine (Declarative Matrix).captures mixed runtime details for workloads with partial matches" time="0.1161" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="provides stable empty runtime details when workload has no checks" name="Workspace State Engine (Declarative Matrix).provides stable empty runtime details when workload has no checks" time="0.0947" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="uses persisted Active_System_Mode for strict Active/Inactive status" name="Workspace State Engine (Declarative Matrix).uses persisted Active_System_Mode for strict Active/Inactive status" time="0.1173" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="builds compliance rows once per hardware definition using active mode targets" name="Workspace State Engine (Declarative Matrix).builds compliance rows once per hardware definition using active mode targets" time="0.1117" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="defaults all compliance targets to ANY when no active mode is persisted" name="Workspace State Engine (Declarative Matrix).defaults all compliance targets to ANY when no active mode is persisted" time="0.1182" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="creates a default state file when one does not exist" name="Workspace State Engine (Declarative Matrix).creates a default state file when one does not exist" time="0.0852" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="sorts grouped workloads by priority then name" name="Workspace State Engine (Declarative Matrix).sorts grouped workloads by priority then name" time="0.0867" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+    </results>
+  </test-suite>
+</test-results>

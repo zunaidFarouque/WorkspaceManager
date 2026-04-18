@@ -4,14 +4,14 @@ The Dashboard is an interactive PowerShell console UI for inspecting compliance,
 
 ## Dashboard state (`state.json`)
 
-Beside `workspaces.json`, the dashboard persists **`state.json`** in the repo root. Tab 2 (multi-mode) writes **`Active_System_Mode`** there when you set the blueprint (`Set-DashboardActiveBlueprint` in `Dashboard.Impl.ps1`). `WorkspaceState.ps1` reads the same file so mode compliance and workload summaries stay aligned with the chosen active system mode.
+Beside `workspaces.json`, the dashboard persists **`state.json`** in `Scripts\`. Tab 2 (multi-mode) writes **`Active_System_Mode`** there when you set the blueprint (`Set-DashboardActiveBlueprint` in `Dashboard.Impl.ps1`). `WorkspaceState.ps1` reads the same file so mode compliance and workload summaries stay aligned with the chosen active system mode.
 
 ## Launch
 
 From the repository root (PowerShell 7):
 
 ```powershell
-pwsh -File .\Dashboard.ps1
+.\Scripts\Run-Dashboard.cmd
 ```
 
 **Windows PowerShell 5.1:** If you run `Dashboard.ps1` under `powershell.exe`, it detects PowerShell 7 and **re-launches** `Dashboard.Impl.ps1` with `pwsh.exe` in the same console so keyboard input works reliably.
@@ -26,7 +26,11 @@ Optional parameters (passed through to `Dashboard.Impl.ps1`):
 
 ### Desktop shortcut with icon
 
-`Create-DashboardShortcut.ps1` writes a `.lnk` that targets `Run-Dashboard.cmd` and uses `Assets\Dashboard.ico` when present. Default shortcut path is the user Desktop (`Workspace Manager Dashboard.lnk`). Override with `-ShortcutPath`.
+`Create-DashboardShortcut.ps1` writes a `.lnk` that targets `Scripts\Run-Dashboard.cmd` and uses `Assets\Dashboard.ico` when present. Default shortcut path is the user Desktop (`Workspace Manager Dashboard.lnk`). Override with `-ShortcutPath`.
+
+`Setup.cmd` (repository root) always creates `Workspace Manager Dashboard.lnk` in the project root first, then offers optional Desktop and Start Menu shortcut generation.
+
+For a **custom icon while the dashboard runs** (tab and taskbar under Windows Terminal), add a profile with `icon` pointing at the same `.ico` file—see [Windows-Terminal.md](Windows-Terminal.md).
 
 ---
 
@@ -132,5 +136,5 @@ When you press **Enter** to commit:
 - [Orchestrator-Flow.md](Orchestrator-Flow.md) — orchestrator phases including `__SYNC_ONLY__`.
 - [Edge-Cases.md](Edge-Cases.md) — operational caveats.
 - [Architecture.md](Architecture.md) — components and data flow.
-- [Schema.md](../Schema.md) — configuration entry point.
+- [_schema.md](_schema.md) — configuration entry point (links to readme).
 - [Audit.md](Audit.md) — doc ↔ code matrix.

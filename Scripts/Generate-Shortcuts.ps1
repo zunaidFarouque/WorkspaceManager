@@ -43,6 +43,15 @@ Get-ChildItem -Path $shortcutDir -Filter "*.lnk" -File -ErrorAction SilentlyCont
 
 $wshShell = New-Object -ComObject WScript.Shell
 $orchestratorPath = Join-Path -Path $PSScriptRoot -ChildPath "Orchestrator.ps1"
+$repoRoot = Split-Path -Path $PSScriptRoot -Parent
+$iconIco = Join-Path -Path $repoRoot -ChildPath "Assets\Dashboard.ico"
+$iconFallback = (Get-Command -Name "pwsh.exe" -ErrorAction Stop).Source
+if (-not (Test-Path -LiteralPath $iconIco)) {
+    Write-Warning "Custom icon not found at '$iconIco'. Using pwsh.exe icon for Start Menu shortcuts."
+    $iconLocation = "$iconFallback,0"
+} else {
+    $iconLocation = "$iconIco,0"
+}
 $metadataKeys = @("_config", "comment", "description")
 
 function Get-ShortcutModeFromNode {
@@ -128,7 +137,9 @@ foreach ($target in $targets) {
         $startShortcutPath = Join-Path -Path $shortcutDir -ChildPath "$prefixStart$workspaceName.lnk"
         $startShortcut = $wshShell.CreateShortcut($startShortcutPath)
         $startShortcut.TargetPath = "pwsh.exe"
+        $startShortcut.WorkingDirectory = $PSScriptRoot
         $startShortcut.Arguments = "-WindowStyle $consoleStyle -ExecutionPolicy Bypass -File `"$orchestratorPath`" -WorkspaceName `"$workspaceName`" -Action `"Start`""
+        $startShortcut.IconLocation = $iconLocation
         $startShortcut.Save()
     }
 
@@ -136,7 +147,9 @@ foreach ($target in $targets) {
         $stopShortcutPath = Join-Path -Path $shortcutDir -ChildPath "$prefixStop$workspaceName.lnk"
         $stopShortcut = $wshShell.CreateShortcut($stopShortcutPath)
         $stopShortcut.TargetPath = "pwsh.exe"
+        $stopShortcut.WorkingDirectory = $PSScriptRoot
         $stopShortcut.Arguments = "-WindowStyle $consoleStyle -ExecutionPolicy Bypass -File `"$orchestratorPath`" -WorkspaceName `"$workspaceName`" -Action `"Stop`""
+        $stopShortcut.IconLocation = $iconLocation
         $stopShortcut.Save()
     }
 }

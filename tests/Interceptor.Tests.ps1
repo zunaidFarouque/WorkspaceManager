@@ -2,8 +2,10 @@ Set-StrictMode -Version Latest
 
 Describe "Interceptor workload resolution and flow" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Interceptor.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Interceptor.ps1")
         $env:WorkspaceManager_InProcPolling = "1"
     }
 
@@ -315,3 +317,5 @@ Describe "Interceptor workload resolution and flow" {
         Assert-MockCalled -CommandName Start-Process -Times 1 -Exactly
     }
 }
+
+

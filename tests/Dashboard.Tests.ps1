@@ -2,8 +2,10 @@ Set-StrictMode -Version Latest
 
 Describe "Dashboard Phase 3 Commit Engine" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "invokes orchestrator only for workload and mode entries with desired delta" {
@@ -30,8 +32,10 @@ Describe "Dashboard Phase 3 Commit Engine" {
 
 Describe "Dashboard Phase 3 Desired-State Toggle" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "toggles Active/Inactive for non-mixed current state" {
@@ -62,8 +66,10 @@ Describe "Dashboard Phase 3 Desired-State Toggle" {
 
 Describe "Dashboard Phase 3 Post-Commit Messaging" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "harvests post-change and action-specific messages from System_Modes path" {
@@ -122,8 +128,10 @@ Describe "Dashboard Phase 3 Post-Commit Messaging" {
 
 Describe "Dashboard Tab 3 Manual Override Console" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "toggles ON and OFF desired state for manual hardware override rows" {
@@ -190,8 +198,10 @@ Describe "Dashboard Tab 3 Manual Override Console" {
 
 Describe "Dashboard Tab 2/3 Queue Workflow" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "queues ideal targets for compliance violations only" {
@@ -347,8 +357,10 @@ Describe "Dashboard Tab 2/3 Queue Workflow" {
 
 Describe "Dashboard Tab 4 Settings" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "returns settings as active array for tab 4" {
@@ -387,7 +399,8 @@ Describe "Dashboard Tab 4 Settings" {
         }
 
         $rows = @(Get-DashboardSettingsRows -Workspaces $workspaces)
-        $rows.Count | Should -Be 6
+        $rows.Count | Should -Be 7
+        (@($rows | Where-Object { $_.Key -eq "disable_startup_logo" }))[0].Value | Should -BeFalse
         (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Type | Should -Be "bool"
         (@($rows | Where-Object { $_.Key -eq "interceptor_poll_max_seconds" }))[0].Type | Should -Be "int"
         (@($rows | Where-Object { $_.Key -eq "shortcut_prefix_start" }))[0].Description.Length | Should -BeGreaterThan 5
@@ -395,6 +408,13 @@ Describe "Dashboard Tab 4 Settings" {
         (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Description | Should -Match 'executable interceptors'
         (@($rows | Where-Object { $_.Key -eq "enable_interceptors" }))[0].Description | Should -Not -Match 'Office executable'
         (@($rows | Where-Object { $_.Key -eq "interceptor_poll_max_seconds" }))[0].Example | Should -Match 'Example: 15'
+    }
+
+    It "reports startup logo disabled only when _config.disable_startup_logo is true" {
+        (Test-DashboardStartupLogoDisabled -Workspaces ([pscustomobject]@{ App_Workloads = [pscustomobject]@{} })) | Should -BeFalse
+        (Test-DashboardStartupLogoDisabled -Workspaces ([pscustomobject]@{ _config = [pscustomobject]@{} })) | Should -BeFalse
+        (Test-DashboardStartupLogoDisabled -Workspaces ([pscustomobject]@{ _config = [pscustomobject]@{ disable_startup_logo = $false } })) | Should -BeFalse
+        (Test-DashboardStartupLogoDisabled -Workspaces ([pscustomobject]@{ _config = [pscustomobject]@{ disable_startup_logo = $true } })) | Should -BeTrue
     }
 
     It "toggles bool and cycles choice on space" {
@@ -620,8 +640,10 @@ Describe "Dashboard Tab 4 Settings" {
 
 Describe "Dashboard Commit Scope Rules" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "builds commit states from workload deltas and queued hardware only" {
@@ -720,8 +742,10 @@ Describe "Dashboard Commit Scope Rules" {
 
 Describe "Dashboard Workload Detail Modes" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "cycles detail mode in the expected order" {
@@ -802,8 +826,10 @@ Describe "Dashboard Workload Detail Modes" {
 
 Describe "Dashboard Workload Group Label Formatting" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "pads short domain names to 8 characters inside brackets" {
@@ -845,8 +871,10 @@ Describe "Dashboard Workload Group Label Formatting" {
 
 Describe "Dashboard Workload Filtering and Viewport" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "filters workloads by domain, favorites, mixed, and search query" {
@@ -898,8 +926,10 @@ Describe "Dashboard Workload Filtering and Viewport" {
 
 Describe "Dashboard Commit Return Mode" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        . (Join-Path -Path $script:here -ChildPath "Dashboard.ps1")
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
     }
 
     It "uses Exit as the default commit mode" {
@@ -978,3 +1008,8 @@ Describe "Dashboard Commit Return Mode" {
         Assert-MockCalled -CommandName Invoke-DashboardCommit -Times 1 -Exactly
     }
 }
+
+
+
+
+

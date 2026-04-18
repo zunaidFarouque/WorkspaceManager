@@ -878,6 +878,7 @@ function Get-DashboardSettingsDefinitions {
         [pscustomobject]@{ Key = "interceptor_poll_max_seconds"; Type = "int"; Choices = @(); Min = 1; Example = "Example: 15 waits up to 15 seconds before timing out."; Description = "Maximum seconds an interceptor waits for required service/process readiness." }
         [pscustomobject]@{ Key = "shortcut_prefix_start"; Type = "string"; Choices = @(); Min = $null; Example = "Example: !Start- creates names like !Start-Office.lnk"; Description = "Prefix used when generating Start shortcut names." }
         [pscustomobject]@{ Key = "shortcut_prefix_stop"; Type = "string"; Choices = @(); Min = $null; Example = "Example: !Stop- creates names like !Stop-Office.lnk"; Description = "Prefix used when generating Stop shortcut names." }
+        [pscustomobject]@{ Key = "disable_startup_logo"; Type = "bool"; Choices = @(); Min = $null; Example = "Example: true skips the ASCII banner once before the hardware scan."; Description = "When true, skips the ASCII logo printed once before the PnP hardware scan at dashboard startup (Tab 4 can persist this in workspaces.json)." }
     )
 }
 
@@ -1715,6 +1716,35 @@ function Start-DashboardAutoCommit {
     Start-Sleep -Seconds 8
 }
 
+function Write-DashboardAsciiLogo {
+    $relative = Join-Path -Path $PSScriptRoot -ChildPath "..\Assets\ASCII_logo.txt"
+    $logoPath = [System.IO.Path]::GetFullPath($relative)
+    if (-not (Test-Path -LiteralPath $logoPath -PathType Leaf)) {
+        return
+    }
+    foreach ($line in Get-Content -LiteralPath $logoPath -Encoding utf8) {
+        Write-Host $line
+    }
+    Write-Host ""
+}
+
+function Test-DashboardStartupLogoDisabled {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Workspaces
+    )
+
+    if ($null -eq $Workspaces.PSObject.Properties["_config"]) {
+        return $false
+    }
+    $config = $Workspaces._config
+    if ($null -eq $config -or $null -eq $config.PSObject.Properties["disable_startup_logo"]) {
+        return $false
+    }
+    return $config.disable_startup_logo -eq $true
+}
+
 function Start-Dashboard {
     param(
         [string]$AutoCommitWorkloadName,
@@ -1752,6 +1782,9 @@ function Start-Dashboard {
         exit
     }
 
+    if (-not (Test-DashboardStartupLogoDisabled -Workspaces $workspaces)) {
+        Write-DashboardAsciiLogo
+    }
     Write-Host "Scanning hardware devices..." -ForegroundColor DarkGray
     $globalPnpCache = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue
     Update-DashboardRuntimeState -Workspaces $workspaces -PnpCache $globalPnpCache

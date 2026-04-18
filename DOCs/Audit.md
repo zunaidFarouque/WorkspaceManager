@@ -12,6 +12,7 @@ Legend: **Pass** = matches code; **Doc updated** = fixed in same change set as t
 | Configuration.md — `_config` | Keys consumed per component | `Orchestrator.ps1`, `Dashboard.Impl.ps1` `Get-DashboardSettingsDefinitions`, `Interceptor.ps1`, `Generate-Shortcuts.ps1` | Pass |
 | Configuration.md — `console_style` | Split: shortcuts only `Hidden`; Dashboard choices `Normal`/`Compact` coerce unknowns | `Generate-Shortcuts.ps1` (~20–23), `Dashboard.Impl.ps1` (~942–946) | Doc updated |
 | Configuration.md — Generate-Shortcuts | Only `System_Modes` + `App_Workloads` names; no root-key skip list | `Generate-Shortcuts.ps1` (~100–116) | Doc updated |
+| Configuration.md — Generate-Shortcuts icon | `.lnk` uses `Assets\Dashboard.ico` when present; else `pwsh`; `WorkingDirectory` = `Scripts` | `Generate-Shortcuts.ps1` (~46–54, ~140–152) | Pass |
 | Configuration.md — Intercepts `requires` | Legacy string = full workload; object + `requires` resets lists; omitted `services`/`executables` properties leave empty arrays | `Interceptor.ps1` `Resolve-InterceptedWorkload` (~113–132) | Doc updated (clarified `services`) |
 | Configuration.md — Not implemented list | Timer in orchestrator service path, etc. | `Orchestrator.ps1` | Pass |
 | Configuration.md — Tokens / WorkspaceState | `#` and `t N` ignored for “is exe running” only | `WorkspaceState.ps1` `Get-ExecutableIsRunning` (~53–55) | Doc updated |

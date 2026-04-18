@@ -2,16 +2,18 @@ Set-StrictMode -Version Latest
 
 Describe "Workspace State Engine (Declarative Matrix)" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        $script:statePath = Join-Path -Path $script:here -ChildPath "state.json"
-        $script:stateBackupPath = Join-Path -Path $script:here -ChildPath "state.json.test-backup"
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        $script:statePath = Join-Path -Path $script:scriptsDir -ChildPath "state.json"
+        $script:stateBackupPath = Join-Path -Path $script:scriptsDir -ChildPath "state.json.test-backup"
         if (Test-Path -Path $script:stateBackupPath) {
             Remove-Item -Path $script:stateBackupPath -Force
         }
         if (Test-Path -Path $script:statePath) {
             Move-Item -Path $script:statePath -Destination $script:stateBackupPath -Force
         }
-        . (Join-Path -Path $script:here -ChildPath "WorkspaceState.ps1")
+        . (Join-Path -Path $script:scriptsDir -ChildPath "WorkspaceState.ps1")
     }
 
     AfterAll {
@@ -261,3 +263,5 @@ Describe "Workspace State Engine (Declarative Matrix)" {
         @($state.AppWorkloads.PSObject.Properties.Name) | Should -Be @("Alpha", "Beta", "Zeta")
     }
 }
+
+

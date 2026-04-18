@@ -5,7 +5,8 @@
     "notifications": true,
     "interceptor_poll_max_seconds": 15,
     "shortcut_prefix_start": "!Start-",
-    "shortcut_prefix_stop": "!Stop-"
+    "shortcut_prefix_stop": "!Stop-",
+    "disable_startup_logo": false
   },
   "Hardware_Definitions": {
     "GPU_Scheduling_HAGS": {

@@ -4,7 +4,7 @@ WorkspaceManager is a declarative Windows state tool. You describe **what should
 
 **Naming:** User-facing strings (toasts, window titles, Start Menu folder) use **WorkspaceManager**. Managed IFEO registry values include `WorkspaceManager_Owner`, which is set to the fixed literal **`BG-Services-Orchestrator`** in `Orchestrator.ps1` so cleanup only touches hooks owned by this deployment (see [Edge-Cases.md](Edge-Cases.md)).
 
-The full JSON contract lives in [Configuration.md](Configuration.md); [Schema.md](../Schema.md) is a short entry point into that document.
+The full JSON contract lives in [Configuration.md](Configuration.md). For the readme's collapsible cross-link index, start from [_schema.md](_schema.md).
 
 ## 1. Configuration layout (`workspaces.json`)
 
@@ -27,8 +27,8 @@ Optional metadata keys at the root or inside objects (`comment`, `description`) 
 | Workspace state | `WorkspaceState.ps1` | Compute physical state (services, PnP, registry, processes, refresh-rate heuristics) and compliance rows for the Dashboard. |
 | Dashboard | `Dashboard.ps1`, `Dashboard.Impl.ps1` | Four-tab TUI: workloads, system modes (when more than one mode exists), hardware compliance / overrides, settings and actions. Commits call the Orchestrator with optional `-ProfileType`. |
 | Interceptors | `Interceptor.ps1`, `InterceptorPoll.ps1`, `Interceptor.vbs` | When enabled, IFEO **Debugger** entries under `HKLM\...\Image File Execution Options` launch the wrapper; poll script brings up required services/executables before the real executable runs. |
-| Shortcuts | `Generate-Shortcuts.ps1` | Writes Start Menu `.lnk` files that invoke `pwsh` + `Orchestrator.ps1` for each **System Mode** name and each **App Workload** name (see [Configuration.md](Configuration.md)). |
-| Dashboard launch | `Run-Dashboard.cmd`, `Create-DashboardShortcut.ps1` | `Run-Dashboard.cmd` changes to the repo root and runs `Dashboard.ps1` under `pwsh`. `Create-DashboardShortcut.ps1` creates a Desktop `.lnk` to that cmd file with optional `Assets\Dashboard.ico`. |
+| Shortcuts | `Generate-Shortcuts.ps1` | Writes Start Menu `.lnk` files that invoke `pwsh` + `Orchestrator.ps1` for each **System Mode** name and each **App Workload** name (see [Configuration.md](Configuration.md)). Icons use `Assets\Dashboard.ico` when present. |
+| Dashboard launch | `Scripts\Run-Dashboard.cmd`, `Create-DashboardShortcut.ps1`, `Setup.cmd` | `Scripts\Run-Dashboard.cmd` changes to the repo root and runs `Dashboard.ps1` under `pwsh`. `Create-DashboardShortcut.ps1` creates a `.lnk` to that cmd file with optional `Assets\Dashboard.ico`. `Setup.cmd` creates a repo-root dashboard shortcut and optionally Desktop + Start Menu shortcuts. Optional Windows Terminal branding: [Windows-Terminal.md](Windows-Terminal.md). |
 
 ## 3. States in the Dashboard
 

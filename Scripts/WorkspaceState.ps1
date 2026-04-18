@@ -1,10 +1,26 @@
+function Get-WorkspaceRepoRoot {
+    $configDir = $PSScriptRoot
+    $wsJson = Join-Path -Path $configDir -ChildPath "workspaces.json"
+    if (Test-Path -LiteralPath $wsJson) {
+        $configDir = [System.IO.Path]::GetDirectoryName($wsJson)
+    }
+
+    if (Test-Path -LiteralPath (Join-Path -Path $configDir -ChildPath "CustomScripts") -PathType Container) {
+        return $configDir
+    }
+
+    $parentDir = Split-Path -Path $configDir -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parentDir) -and
+        (Test-Path -LiteralPath (Join-Path -Path $parentDir -ChildPath "CustomScripts") -PathType Container)) {
+        return $parentDir
+    }
+
+    return $configDir
+}
+
 function Resolve-QuotedRelativeExecutionToken {
     param([Parameter(Mandatory)][string]$ExecutionToken)
-    $root = $PSScriptRoot
-    $wsJson = Join-Path -Path $root -ChildPath "workspaces.json"
-    if (Test-Path -LiteralPath $wsJson) {
-        $root = [System.IO.Path]::GetDirectoryName($wsJson)
-    }
+    $root = Get-WorkspaceRepoRoot
     $sep = [System.IO.Path]::DirectorySeparatorChar
     [regex]::Replace($ExecutionToken, "^'\.[\/\\](.*?)'", {
         param($match)
@@ -18,11 +34,7 @@ function Resolve-RepoRelativeFilePath {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         return $Path
     }
-    $root = $PSScriptRoot
-    $wsJson = Join-Path -Path $root -ChildPath "workspaces.json"
-    if (Test-Path -LiteralPath $wsJson) {
-        $root = [System.IO.Path]::GetDirectoryName($wsJson)
-    }
+    $root = Get-WorkspaceRepoRoot
     $t = $Path.Trim()
     if ($t.Length -ge 2 -and $t[0] -eq [char]'.' -and ($t[1] -eq [char]'/' -or $t[1] -eq '\')) {
         $rest = $t.Substring(2).TrimStart([char[]]@('/', '\'))

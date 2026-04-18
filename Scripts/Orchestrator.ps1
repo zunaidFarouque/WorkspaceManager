@@ -16,6 +16,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Resolve-OrchestratorRepoRoot {
+    param([Parameter(Mandatory)][string]$ConfigDirectory)
+
+    if (Test-Path -LiteralPath (Join-Path -Path $ConfigDirectory -ChildPath "CustomScripts") -PathType Container) {
+        return $ConfigDirectory
+    }
+
+    $parentDir = Split-Path -Path $ConfigDirectory -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parentDir) -and
+        (Test-Path -LiteralPath (Join-Path -Path $parentDir -ChildPath "CustomScripts") -PathType Container)) {
+        return $parentDir
+    }
+
+    return $ConfigDirectory
+}
+
 if (-not (Get-Command -Name Show-Notification -CommandType Function -ErrorAction SilentlyContinue)) {
     function Show-Notification {
         param(
@@ -53,7 +69,8 @@ if (-not (Test-Path -Path $dbPath -PathType Leaf)) {
     throw "Fatal: workspaces.json not found."
 }
 
-$script:OrchestratorRepoRoot = [System.IO.Path]::GetDirectoryName($dbPath)
+$configDir = [System.IO.Path]::GetDirectoryName($dbPath)
+$script:OrchestratorRepoRoot = Resolve-OrchestratorRepoRoot -ConfigDirectory $configDir
 try {
     $workspaces = Get-Content -Path $dbPath -Raw -Encoding utf8 | ConvertFrom-Json
 } catch {

@@ -45,6 +45,7 @@ All keys are optional unless noted.
 | `shortcut_prefix_start` | string | `Generate-Shortcuts.ps1` | Prefix for Start `.lnk` filenames (default `!Start-`). |
 | `shortcut_prefix_stop` | string | `Generate-Shortcuts.ps1` | Prefix for Stop `.lnk` filenames (default `!Stop-`). |
 | `console_style` | string | `Generate-Shortcuts.ps1`, Dashboard Tab 4 | **Shortcuts:** `Generate-Shortcuts.ps1` sets `-WindowStyle Hidden` on generated `.lnk` files only when the value is exactly `Hidden`; otherwise shortcuts use `Normal`. **Dashboard:** Tab 4 only offers `Normal` and `Compact` for UI density (`Get-DashboardSettingsDefinitions` in `Dashboard.Impl.ps1`). When the dashboard builds settings rows, any value not in that set (including `Hidden`) is **coerced to `Normal`**—so hand-editing `Hidden` for shortcuts will be overwritten if you save settings from the Dashboard without re-adding `Hidden` manually afterward. |
+| `disable_startup_logo` | bool | Dashboard | When `true`, skips the ASCII logo printed once before the hardware (PnP) scan at dashboard startup. Default when omitted: show the logo. |
 
 ---
 
@@ -155,7 +156,7 @@ Used for `executables`, hardware `action_override_*`, and anywhere the Orchestra
 
 ### Relative paths
 
-- A token may start with `'./` or `'.\` inside the quotes: `"'./CustomScripts/foo.ps1'"`. The segment is expanded to an absolute path rooted at the folder containing `workspaces.json` before `Test-Path`, `Start-Process`, or ShellExecute.
+- A token may start with `'./` or `'.\` inside the quotes: `"'./CustomScripts/foo.ps1'"`. The segment is expanded to an absolute path rooted at the detected repo root (folder containing `CustomScripts`; if not found, fallback to the folder containing `workspaces.json`) before `Test-Path`, `Start-Process`, or ShellExecute.
 
 ### Command-style tokens
 
@@ -182,6 +183,7 @@ Use doubled backslashes or forward slashes in JSON string values.
 3. Shortcut basenames come **only** from those two sections—the script does not scan other top-level JSON keys, so `_config`, `Hardware_Definitions`, and other reserved sections never produce `.lnk` files unless you incorrectly nest them under `System_Modes` or `App_Workloads`.
 4. Honors `create_shortcut_for` on each mode or workload object.
 5. Shortcut arguments call `pwsh.exe` with `-File Orchestrator.ps1 -WorkspaceName "<Name>" -Action Start|Stop` (no `-ProfileType`; resolution uses Phase C defaults).
+6. Each `.lnk` uses `IconLocation` **`Assets\Dashboard.ico`** at the repository root when that file exists; otherwise the PowerShell executable icon. `WorkingDirectory` is set to the `Scripts` folder (same directory as `Orchestrator.ps1`).
 
 Hardware-only components do **not** get shortcuts unless you add a legacy flat object or a dedicated mode.
 
@@ -200,6 +202,7 @@ Workspace state and compliance rows are computed in `WorkspaceState.ps1` and `Da
 - [Architecture.md](Architecture.md)
 - [Orchestrator-Flow.md](Orchestrator-Flow.md)
 - [Dashboard.md](Dashboard.md)
+- [Windows-Terminal.md](Windows-Terminal.md)
 - [Edge-Cases.md](Edge-Cases.md)
-- [Schema.md](../Schema.md) (pointer into this file)
+- [_schema.md](_schema.md) (hub: readme entry point; this file remains the authoritative spec)
 - [Audit.md](Audit.md) (doc ↔ code matrix)

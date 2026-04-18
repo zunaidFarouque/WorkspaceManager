@@ -2,10 +2,12 @@ Set-StrictMode -Version Latest
 
 Describe "Orchestrator Dictionary/Matrix Execution" {
     BeforeAll {
-        $script:here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-        $script:scriptPath = Join-Path -Path $script:here -ChildPath "Orchestrator.ps1"
-        $script:dbPath = Join-Path -Path $script:here -ChildPath "workspaces.json"
-        $script:backupPath = Join-Path -Path $script:here -ChildPath "workspaces.json.test-backup"
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        $script:scriptPath = Join-Path -Path $script:scriptsDir -ChildPath "Orchestrator.ps1"
+        $script:dbPath = Join-Path -Path $script:scriptsDir -ChildPath "workspaces.json"
+        $script:backupPath = Join-Path -Path $script:scriptsDir -ChildPath "workspaces.json.test-backup"
     }
 
     BeforeEach {
@@ -496,3 +498,5 @@ Describe "Orchestrator Dictionary/Matrix Execution" {
         Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
     }
 }
+
+

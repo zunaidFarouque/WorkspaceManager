@@ -5,7 +5,7 @@ Creates a double-clickable shortcut (with custom icon) to the WorkspaceManager d
 
 .DESCRIPTION
 Windows .cmd files cannot show a custom Explorer icon. This script writes a .lnk that
-targets Run-Dashboard.cmd and uses Assets/Dashboard.ico when present.
+targets Scripts/Run-Dashboard.cmd and uses Assets/Dashboard.ico when present.
 
 .PARAMETER ShortcutPath
 Full path to the .lnk file to create. Default: Desktop\Workspace Manager Dashboard.lnk
@@ -18,10 +18,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$repoRoot = $PSScriptRoot
-$launcher = Join-Path -Path $repoRoot -ChildPath "Run-Dashboard.cmd"
+$repoRoot = Split-Path -Path $PSScriptRoot -Parent
+$launcher = Join-Path -Path $PSScriptRoot -ChildPath "Run-Dashboard.cmd"
 if (-not (Test-Path -LiteralPath $launcher)) {
-    throw "Missing Run-Dashboard.cmd at '$launcher'."
+    throw "Missing Scripts/Run-Dashboard.cmd at '$launcher'."
 }
 
 $iconIco = Join-Path -Path $repoRoot -ChildPath "Assets\Dashboard.ico"

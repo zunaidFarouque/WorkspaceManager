@@ -34,7 +34,7 @@ The Dashboard **does not** compute a global dependency graph or merge overlappin
 
 The Dashboard requires interactive **console** key input. Remote sessions, piped stdin, or hosts without `KeyAvailable` show an error and exit.
 
-**Mitigation:** Run from Windows Terminal or `pwsh` in a local interactive session; use `Run-Dashboard.cmd` or `Create-DashboardShortcut.ps1` for a predictable console.
+**Mitigation:** Run from Windows Terminal or `pwsh` in a local interactive session; use `Scripts\Run-Dashboard.cmd`, `Setup.cmd`, or `Create-DashboardShortcut.ps1` for a predictable console.
 
 ## 6. Windows Search and Start Menu shortcuts
 
@@ -62,5 +62,5 @@ If environment variable **`WorkspaceManager_InterceptorBypass=1`** is set in the
 - [Orchestrator-Flow.md](Orchestrator-Flow.md) — phases and IFEO sync.
 - [Dashboard.md](Dashboard.md) — Tab 4 `Reset_Interceptors`.
 - [Architecture.md](Architecture.md) — component overview.
-- [Schema.md](../Schema.md) — configuration entry point.
+- [_schema.md](_schema.md) — configuration entry point (links to readme).
 - [Audit.md](Audit.md) — doc ↔ code matrix.

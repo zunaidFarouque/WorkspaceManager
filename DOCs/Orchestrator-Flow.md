@@ -13,7 +13,7 @@ This document matches `Orchestrator.ps1` as shipped. Parameters and order matter
 
 ## Phase A — Load and parse
 
-1. Resolve `workspaces.json` next to `Orchestrator.ps1`. Missing file → fatal error.
+1. Resolve `workspaces.json` next to `Scripts\Orchestrator.ps1` (wrapper `Orchestrator.ps1` calls into `Scripts\Orchestrator.ps1`). Missing file → fatal error.
 2. Read UTF-8 JSON with `ConvertFrom-Json`. Parse failure → fatal error with exception text.
 3. Read `_config` if present:
    - `notifications` → boolean: when `$true`, successful Start/Stop may show a Windows toast (best effort).
@@ -26,7 +26,7 @@ This document matches `Orchestrator.ps1` as shipped. Parameters and order matter
 If `-SkipInterceptorSync` is **not** set:
 
 - When `enable_interceptors` is `$false`, managed keys under `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options` that carry `WorkspaceManager_Managed = 1` and matching `WorkspaceManager_Owner` equal to **`BG-Services-Orchestrator`** are cleaned (Debugger and WorkspaceManager metadata removed). Keys owned by another tag are left intact.
-- When `enable_interceptors` is `$true`, hooks are written for each intercept rule on each app workload (see [Configuration.md](Configuration.md) intercepts section). A small `Interceptor.vbs` wrapper path is stored in the Debugger value.
+- When `enable_interceptors` is `$true`, hooks are written for each intercept rule on each app workload (see [Configuration.md](Configuration.md) intercepts section). A small `Scripts\Interceptor.vbs` wrapper path is stored in the Debugger value.
 
 Console prints a one-line summary of adds or removals.
 
@@ -104,6 +104,6 @@ The orchestrator emits the resolved profile **object** to the pipeline at the en
 - [Configuration.md](Configuration.md) — JSON schema and execution tokens.
 - [Dashboard.md](Dashboard.md) — interactive console UI.
 - [Edge-Cases.md](Edge-Cases.md) — operational caveats.
-- [Schema.md](../Schema.md) — entry point into configuration reference.
+- [_schema.md](_schema.md) — entry point into configuration reference (links to readme).
 - [Audit.md](Audit.md) — doc ↔ code matrix.
 - Pester: `Orchestrator.Tests.ps1` encodes routing and interceptor ownership behavior.

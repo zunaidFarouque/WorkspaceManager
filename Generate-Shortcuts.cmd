@@ -10,7 +10,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Dashboard.ps1" %*
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Scripts\Generate-Shortcuts.ps1" %*
 set "ERR=%ERRORLEVEL%"
 if not "%ERR%"=="0" pause
 exit /b %ERR%

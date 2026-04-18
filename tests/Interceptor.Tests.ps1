@@ -372,31 +372,40 @@ Describe "Interceptor workload resolution and flow" {
     }
 
     It "sets Disabled service to Manual and starts it when the user confirms" {
+        $script:mockCtrStartType = "Disabled"
         Mock -CommandName Get-Service -MockWith {
             param([string]$Name)
             if ($Name -eq "ClickToRunSvc") {
                 return [pscustomobject]@{
                     Name                 = "ClickToRunSvc"
-                    StartType            = "Disabled"
+                    StartType            = $script:mockCtrStartType
                     Status               = "Stopped"
                     ServicesDependedOn   = @()
                 }
             }
             return $null
         }
-        Mock -CommandName Show-InterceptorDisabledServicePrompt -MockWith { $true }
+        Mock -CommandName Show-InterceptorDisabledServicePrompt -MockWith { "Yes" }
         $script:gsudoInterceptorLog = @()
-        Mock -CommandName gsudo -MockWith { $script:gsudoInterceptorLog += ,($args -join " ") }
+        Mock -CommandName gsudo -MockWith {
+            $line = $args -join " "
+            $script:gsudoInterceptorLog += ,$line
+            if ($line -match "^Set-Service -Name ClickToRunSvc -StartupType Manual") {
+                $script:mockCtrStartType = "Manual"
+            }
+        }
         Mock -CommandName Start-Process -MockWith { }
 
         Start-RuleActivationFlow -RequiredServices @("ClickToRunSvc") -RequiredExecutables @() -WorkloadName "Office"
 
         @($script:gsudoInterceptorLog | Where-Object { $_ -match "Set-Service -Name ClickToRunSvc -StartupType Manual" }).Count | Should -Be 1
         @($script:gsudoInterceptorLog | Where-Object { $_ -match "Start-Service -Name ClickToRunSvc" }).Count | Should -Be 1
+        Assert-MockCalled -CommandName Start-Process -Times 1 -Exactly
         Remove-Variable -Name gsudoInterceptorLog -Scope Script -ErrorAction SilentlyContinue
+        Remove-Variable -Name mockCtrStartType -Scope Script -ErrorAction SilentlyContinue
     }
 
-    It "does not set Manual when the user declines the disabled-service prompt" {
+    It "aborts activation without observe window when user aborts disabled-service prompt" {
         Mock -CommandName Get-Service -MockWith {
             param([string]$Name)
             if ($Name -eq "ClickToRunSvc") {
@@ -409,16 +418,13 @@ Describe "Interceptor workload resolution and flow" {
             }
             return $null
         }
-        Mock -CommandName Show-InterceptorDisabledServicePrompt -MockWith { $false }
-        $script:gsudoInterceptorLog = @()
-        Mock -CommandName gsudo -MockWith { $script:gsudoInterceptorLog += ,($args -join " ") }
+        Mock -CommandName Show-InterceptorDisabledServicePrompt -MockWith { "Cancel" }
+        Mock -CommandName gsudo -MockWith { throw "gsudo should not run after Cancel" }
         Mock -CommandName Start-Process -MockWith { }
 
         Start-RuleActivationFlow -RequiredServices @("ClickToRunSvc") -RequiredExecutables @() -WorkloadName "Office"
 
-        @($script:gsudoInterceptorLog | Where-Object { $_ -match "Set-Service" }).Count | Should -Be 0
-        @($script:gsudoInterceptorLog | Where-Object { $_ -match "Start-Service -Name ClickToRunSvc" }).Count | Should -Be 1
-        Remove-Variable -Name gsudoInterceptorLog -Scope Script -ErrorAction SilentlyContinue
+        Assert-MockCalled -CommandName Start-Process -Times 0 -Exactly
     }
 }
 

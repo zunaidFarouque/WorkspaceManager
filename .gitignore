@@ -1,4 +1,5 @@
 .cursor/
+debug-*.log
 RigShift Dashboard.lnk
 RigShift workspaces.json.lnk
 RigShift Config.lnk

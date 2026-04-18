@@ -330,7 +330,8 @@ The Windows service '$ServiceName' has startup type Disabled and cannot be start
 
 It is required for '$RequiredForServiceName' (workload '$WorkloadName').
 
-Set it to Manual and continue?
+Yes - Set startup type to Manual and continue.
+No - Abort activation of workload.
 "@
 
     $result = [System.Windows.Forms.MessageBox]::Show(
@@ -338,10 +339,13 @@ Set it to Manual and continue?
         "RigShift",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question,
-        [System.Windows.Forms.MessageBoxDefaultButton]::Button1
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
     )
 
-    return ($result -eq [System.Windows.Forms.DialogResult]::Yes)
+    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+        return "Yes"
+    }
+    return "Cancel"
 }
 
 function Start-RuleActivationFlow {
@@ -357,25 +361,47 @@ function Start-RuleActivationFlow {
         [string]$WorkloadName
     )
 
+    $script:InterceptorSkippedServiceStartDueToDeclinedDisabled = $false
+    $script:InterceptorUserCancelledDisabledRemediation = $false
+    $script:InterceptorDidRunGsudoStartService = $false
+
     foreach ($serviceName in @($RequiredServices)) {
         $svc = [string]$serviceName
         if ([string]::IsNullOrWhiteSpace($svc)) { continue }
 
-        foreach ($blocker in @(Get-InterceptorDisabledServiceBlockers -ServiceName $svc)) {
-            if (-not (Show-InterceptorDisabledServicePrompt -ServiceName $blocker -RequiredForServiceName $svc -WorkloadName $WorkloadName)) {
-                continue
+        $blockers = @(Get-InterceptorDisabledServiceBlockers -ServiceName $svc)
+
+        foreach ($blocker in $blockers) {
+            $disabledChoice = Show-InterceptorDisabledServicePrompt -ServiceName $blocker -RequiredForServiceName $svc -WorkloadName $WorkloadName
+            if ($disabledChoice -eq "Cancel") {
+                $script:InterceptorUserCancelledDisabledRemediation = $true
+                return
             }
             gsudo Set-Service -Name $blocker -StartupType Manual 2>&1 | Out-Null
         }
 
+        $remainingBlockers = @(Get-InterceptorDisabledServiceBlockers -ServiceName $svc)
+        if ($remainingBlockers.Count -gt 0) {
+            $script:InterceptorSkippedServiceStartDueToDeclinedDisabled = $true
+            continue
+        }
+
+        $global:LASTEXITCODE = 0
         gsudo Start-Service -Name $svc 2>&1 | Out-Null
+        $script:InterceptorDidRunGsudoStartService = $true
     }
 
-    # Open a short observation window so you can see services turning on.
-    # The interceptor runs from `Interceptor.vbs` with hidden PowerShell, so this is the visible UX.
-    $dashboardPath = Join-Path -Path $PSScriptRoot -ChildPath "Dashboard.ps1"
-    $arguments = @("-ExecutionPolicy", "Bypass", "-File", $dashboardPath, "-ObserveWorkloadName", $WorkloadName, "-ObserveSeconds", "10")
-    Start-Process -FilePath "pwsh.exe" -ArgumentList $arguments 2>&1 | Out-Null
+    # Open observe / workload terminal before starting executables — same window as after successful service starts.
+    # Also open when a required service stayed Disabled after prompts (e.g. Set-Service failed) so workload state is visible.
+    $nonEmptyExecutables = @($RequiredExecutables | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $openObserve = ($script:InterceptorDidRunGsudoStartService -eq $true) -or
+        ($nonEmptyExecutables.Count -gt 0) -or
+        ($script:InterceptorSkippedServiceStartDueToDeclinedDisabled -eq $true)
+    if ($openObserve -eq $true) {
+        $dashboardPath = Join-Path -Path $PSScriptRoot -ChildPath "Dashboard.ps1"
+        $arguments = @("-ExecutionPolicy", "Bypass", "-File", $dashboardPath, "-ObserveWorkloadName", $WorkloadName, "-ObserveSeconds", "10")
+        Start-Process -FilePath "pwsh.exe" -ArgumentList $arguments 2>&1 | Out-Null
+    }
 
     foreach ($executionToken in @($RequiredExecutables)) {
         $token = [string]$executionToken
@@ -627,6 +653,9 @@ function Invoke-Interceptor {
         [string[]]$TargetArgs = @()
     )
 
+    $script:InterceptorUserCancelledDisabledRemediation = $false
+    $script:InterceptorSkippedServiceStartDueToDeclinedDisabled = $false
+
     if ([string]$env:RigShift_InterceptorBypass -eq "1") {
         Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
         return
@@ -673,9 +702,17 @@ function Invoke-Interceptor {
         -RequiredExecutables $activationExecutables `
         -WorkloadName $resolved.Name
 
+    if ($script:InterceptorUserCancelledDisabledRemediation -eq $true) {
+        return
+    }
+
     $nowActive = Invoke-InterceptorReadinessPoll -RequiredServices $activationServices -RequiredExecutables $activationExecutables -WorkloadName $resolved.Name
     if ($nowActive) {
         Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        return
+    }
+
+    if ($script:InterceptorSkippedServiceStartDueToDeclinedDisabled -eq $true) {
         return
     }
 

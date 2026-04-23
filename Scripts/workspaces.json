@@ -113,7 +113,7 @@
       ],
       "action_override_off": [
         "gsudo taskkill /F /IM main.exe"
-      ]
+      ] 
     }
   },
   "System_Modes": {

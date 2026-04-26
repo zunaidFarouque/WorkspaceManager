@@ -118,6 +118,122 @@ Describe "Orchestrator Dictionary/Matrix Execution" {
         }
     }
 
+    It "continues stop workflow when executable scoped manual gate timeout is reached" {
+        $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) ("orch-stop-gate-{0}.exe" -f [Guid]::NewGuid().ToString("n"))
+        try {
+            New-Item -ItemType File -Path $tmpExe -Force | Out-Null
+            $exeForJson = $tmpExe.Replace("\", "/")
+            @"
+{
+  "Hardware_Definitions": {},
+  "System_Modes": {},
+  "App_Workloads": {
+    "Tools": {
+      "VpnWorkload": {
+        "services": ["TestSvc"],
+        "executables": ["'$exeForJson'"],
+        "stop_manual_gate_executables": {
+          "enabled": true,
+          "message": "Disconnect VPN now and press Space.",
+          "timeout_seconds": 0,
+          "confirm_key": "Space"
+        }
+      }
+    }
+  }
+}
+"@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+            $global:mockSvcStopPass = 0
+            Mock -CommandName Get-Service -MockWith {
+                $global:mockSvcStopPass++
+                if ($global:mockSvcStopPass -eq 1) {
+                    return [pscustomobject]@{
+                        Name      = "TestSvc"
+                        Status    = [System.ServiceProcess.ServiceControllerStatus]::Running
+                        StartType = [System.ServiceProcess.ServiceStartMode]::Manual
+                    }
+                }
+                return [pscustomobject]@{
+                    Name      = "TestSvc"
+                    Status    = [System.ServiceProcess.ServiceControllerStatus]::Stopped
+                    StartType = [System.ServiceProcess.ServiceStartMode]::Manual
+                }
+            } -ParameterFilter { $Name -eq "TestSvc" }
+
+            $global:gsudoCalls = @()
+            Mock -CommandName gsudo -MockWith {
+                $global:gsudoCalls += ,($args -join " ")
+                "ok"
+            }
+            Mock -CommandName Start-Sleep -MockWith { }
+            $printed = [System.Collections.Generic.List[string]]::new()
+            Mock -CommandName Write-Host -MockWith {
+                param([object]$Object)
+                if ($null -ne $Object) { $printed.Add([string]$Object) }
+            }
+
+            { & $script:scriptPath -WorkspaceName "VpnWorkload" -Action "Stop" -SkipInterceptorSync | Out-Null } | Should -Not -Throw
+
+            (@($global:gsudoCalls | Where-Object { $_ -match 'taskkill /F /IM ' })).Count | Should -Be 1
+            (@($global:gsudoCalls | Where-Object { $_ -match 'powershell -NoProfile -EncodedCommand' })).Count | Should -Be 1
+            Assert-MockCalled -CommandName Start-Sleep -Times 0 -Exactly
+            (@($printed | Where-Object { $_ -eq "Manual stop gate auto-continued after 0s." })).Count | Should -Be 1
+        } finally {
+            Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+            Remove-Variable -Name mockSvcStopPass -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "uses executable-scoped gate for stop execution path" {
+        $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) ("orch-scope-gate-{0}.exe" -f [Guid]::NewGuid().ToString("n"))
+        try {
+            New-Item -ItemType File -Path $tmpExe -Force | Out-Null
+            $exeForJson = $tmpExe.Replace("\", "/")
+            @"
+{
+  "Hardware_Definitions": {},
+  "System_Modes": {},
+  "App_Workloads": {
+    "Tools": {
+      "ScopedGateWorkload": {
+        "services": [],
+        "executables": ["'$exeForJson'"],
+        "stop_manual_gate": {
+          "enabled": true,
+          "message": "GENERIC gate message",
+          "timeout_seconds": 0,
+          "confirm_key": "Space"
+        },
+        "stop_manual_gate_executables": {
+          "enabled": true,
+          "message": "EXECUTABLE gate message",
+          "timeout_seconds": 0,
+          "confirm_key": "Space"
+        }
+      }
+    }
+  }
+}
+"@ | Set-Content -Path $script:dbPath -Encoding UTF8
+
+            Mock -CommandName gsudo -MockWith { "ok" }
+            $printed = [System.Collections.Generic.List[string]]::new()
+            Mock -CommandName Write-Host -MockWith {
+                param([object]$Object)
+                if ($null -ne $Object) { $printed.Add([string]$Object) }
+            }
+
+            { & $script:scriptPath -WorkspaceName "ScopedGateWorkload" -Action "Stop" -ExecutionScope "ExecutablesOnly" -SkipInterceptorSync | Out-Null } | Should -Not -Throw
+
+            (@($printed | Where-Object { $_ -eq "Manual stop gate auto-continued after 0s." })).Count | Should -Be 1
+            (@($printed | Where-Object { $_ -eq "GENERIC gate message" })).Count | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It "throws when elevated service start reports failure" {
         @'
 {

@@ -42,20 +42,21 @@ function Invoke-OrchestratorScript {
         [ValidateSet("All", "HardwareOnly", "PowerPlanOnly", "ServicesOnly", "ExecutablesOnly")]
         [string]$ExecutionScope = "All",
         [switch]$SkipInterceptorSync,
-        [switch]$InteractiveServiceWait
+        [switch]$InteractiveServiceWait,
+        [switch]$SkipManualStopGate
     )
 
     if ([string]::IsNullOrWhiteSpace($ProfileType)) {
         if ($SkipInterceptorSync.IsPresent) {
-            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ExecutionScope $ExecutionScope -SkipInterceptorSync -InteractiveServiceWait:$InteractiveServiceWait
+            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ExecutionScope $ExecutionScope -SkipInterceptorSync -InteractiveServiceWait:$InteractiveServiceWait -SkipManualStopGate:$SkipManualStopGate
         } else {
-            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ExecutionScope $ExecutionScope -InteractiveServiceWait:$InteractiveServiceWait
+            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ExecutionScope $ExecutionScope -InteractiveServiceWait:$InteractiveServiceWait -SkipManualStopGate:$SkipManualStopGate
         }
     } else {
         if ($SkipInterceptorSync.IsPresent) {
-            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ProfileType $ProfileType -ExecutionScope $ExecutionScope -SkipInterceptorSync -InteractiveServiceWait:$InteractiveServiceWait
+            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ProfileType $ProfileType -ExecutionScope $ExecutionScope -SkipInterceptorSync -InteractiveServiceWait:$InteractiveServiceWait -SkipManualStopGate:$SkipManualStopGate
         } else {
-            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ProfileType $ProfileType -ExecutionScope $ExecutionScope -InteractiveServiceWait:$InteractiveServiceWait
+            & $OrchestratorPath -WorkspaceName $WorkspaceName -Action $Action -ProfileType $ProfileType -ExecutionScope $ExecutionScope -InteractiveServiceWait:$InteractiveServiceWait -SkipManualStopGate:$SkipManualStopGate
         }
     }
 }
@@ -1260,7 +1261,7 @@ function Convert-DashboardProgressRowsToDisplayLines {
             $color = "DarkRed"
         }
         $lines.Add([pscustomobject]@{
-            Text = ("{0} {1}: {2}" -f $prefix, [string]$row.Reason, [string]$row.TaskText)
+            Text = ("{0} | {1}: {2}" -f $prefix, [string]$row.Reason, [string]$row.TaskText)
             Color = $color
             Section = $lastSection
         })
@@ -1461,6 +1462,270 @@ function Resolve-DashboardOperationServiceNames {
     return @($names | Select-Object -Unique)
 }
 
+function Test-DashboardOperationUsesManualGate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Operation,
+        [psobject]$Workspaces
+    )
+
+    if ([string]$Operation.ProfileType -ne "App_Workload") { return $false }
+    if ([string]$Operation.Action -ne "Stop") { return $false }
+    if ($null -eq $Workspaces -or $null -eq $Workspaces.PSObject.Properties["App_Workloads"]) { return $false }
+
+    $wl = Resolve-DashboardWorkloadByName -AppWorkloads $Workspaces.App_Workloads -WorkloadName ([string]$Operation.WorkspaceName)
+    if ($null -eq $wl) { return $false }
+
+    $scope = [string]$Operation.ExecutionScope
+    $gateCandidates = @()
+    if ($scope -eq "ExecutablesOnly") {
+        $gateCandidates = @("stop_manual_gate_executables", "stop_manual_gate")
+    } elseif ($scope -eq "ServicesOnly") {
+        $gateCandidates = @("stop_manual_gate_services", "stop_manual_gate")
+    } elseif ($scope -eq "All") {
+        $gateCandidates = @("stop_manual_gate_executables", "stop_manual_gate_services", "stop_manual_gate")
+    } else {
+        return $false
+    }
+
+    foreach ($propName in $gateCandidates) {
+        $gateProp = $wl.PSObject.Properties[$propName]
+        if ($null -eq $gateProp -or $null -eq $gateProp.Value) { continue }
+        $enabledProp = $gateProp.Value.PSObject.Properties["enabled"]
+        if ($null -ne $enabledProp -and $enabledProp.Value -eq $true) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Resolve-DashboardManualGateConfigForOperation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Operation,
+        [psobject]$Workspaces
+    )
+
+    if ([string]$Operation.ProfileType -ne "App_Workload") { return $null }
+    if ([string]$Operation.Action -ne "Stop") { return $null }
+    if ($null -eq $Workspaces -or $null -eq $Workspaces.PSObject.Properties["App_Workloads"]) { return $null }
+    $wl = Resolve-DashboardWorkloadByName -AppWorkloads $Workspaces.App_Workloads -WorkloadName ([string]$Operation.WorkspaceName)
+    if ($null -eq $wl) { return $null }
+
+    $scope = [string]$Operation.ExecutionScope
+    $gateCandidates = @()
+    if ($scope -eq "ExecutablesOnly") {
+        $gateCandidates = @("stop_manual_gate_executables", "stop_manual_gate")
+    } elseif ($scope -eq "ServicesOnly") {
+        $gateCandidates = @("stop_manual_gate_services", "stop_manual_gate")
+    } elseif ($scope -eq "All") {
+        $gateCandidates = @("stop_manual_gate_executables", "stop_manual_gate_services", "stop_manual_gate")
+    } else {
+        return $null
+    }
+
+    foreach ($propName in $gateCandidates) {
+        $gateProp = $wl.PSObject.Properties[$propName]
+        if ($null -eq $gateProp -or $null -eq $gateProp.Value) { continue }
+        $enabledProp = $gateProp.Value.PSObject.Properties["enabled"]
+        if ($null -ne $enabledProp -and $enabledProp.Value -eq $true) {
+            return $gateProp.Value
+        }
+    }
+    return $null
+}
+
+function Resolve-DashboardManualGateItems {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][array]$Operations,
+        [psobject]$Workspaces
+    )
+
+    $items = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    foreach ($op in @($Operations)) {
+        $cfg = Resolve-DashboardManualGateConfigForOperation -Operation $op -Workspaces $Workspaces
+        if ($null -eq $cfg) { continue }
+        $key = ("{0}|{1}" -f [string]$op.WorkspaceName, [string]$op.ExecutionScope)
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $msg = if ($null -ne $cfg.PSObject.Properties["message"] -and -not [string]::IsNullOrWhiteSpace([string]$cfg.message)) { [string]$cfg.message } else { "Manual stop gate confirmation required." }
+        $timeout = 60
+        if ($null -ne $cfg.PSObject.Properties["timeout_seconds"]) {
+            $tmp = 0
+            if ([int]::TryParse([string]$cfg.timeout_seconds, [ref]$tmp) -and $tmp -ge 0) { $timeout = $tmp }
+        }
+        $confirm = if ($null -ne $cfg.PSObject.Properties["confirm_key"] -and -not [string]::IsNullOrWhiteSpace([string]$cfg.confirm_key)) { [string]$cfg.confirm_key } else { "Space" }
+        $items.Add([pscustomobject]@{
+            Key = $key
+            WorkspaceName = [string]$op.WorkspaceName
+            ExecutionScope = [string]$op.ExecutionScope
+            Message = $msg
+            TimeoutSeconds = [int]$timeout
+            ConfirmKey = $confirm
+            Status = "Pending"
+            WaitingText = ""
+        })
+    }
+    return @($items)
+}
+
+function Write-DashboardStopGatesDisplay {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][array]$GateItems,
+        [hashtable]$RenderState = $null,
+        [switch]$UseCursorRedraw
+    )
+
+    if (@($GateItems).Count -eq 0) { return }
+    $lines = [System.Collections.Generic.List[object]]::new()
+    $lines.Add([pscustomobject]@{ Text = ""; Color = "Gray" })
+    $lines.Add([pscustomobject]@{ Text = "STOP GATES"; Color = "White" })
+    foreach ($g in @($GateItems)) {
+        $status = [string]$g.Status
+        if ($status -eq "Done") {
+            $lines.Add([pscustomobject]@{ Text = ("OK | {0} : {1}" -f [string]$g.WorkspaceName, [string]$g.Message); Color = "Green" })
+            continue
+        }
+        if ($status -eq "Aborted") {
+            $lines.Add([pscustomobject]@{ Text = ("AB | {0} : {1}" -f [string]$g.WorkspaceName, [string]$g.Message); Color = "DarkRed" })
+            continue
+        }
+        $lines.Add([pscustomobject]@{ Text = (" > | {0} : {1}" -f [string]$g.WorkspaceName, [string]$g.Message); Color = "Red" })
+        if (-not [string]::IsNullOrWhiteSpace([string]$g.WaitingText)) {
+            $lines.Add([pscustomobject]@{ Text = (" > | {0}" -f [string]$g.WaitingText); Color = "Red" })
+        }
+    }
+    $lines.Add([pscustomobject]@{ Text = ""; Color = "Gray" })
+
+    $canRedraw = $UseCursorRedraw.IsPresent -and $null -ne $RenderState -and $RenderState.ContainsKey("CanRedraw") -and [bool]$RenderState["CanRedraw"]
+    if ($canRedraw -and $RenderState.ContainsKey("StartY")) {
+        try {
+            $startRow = [int]$RenderState["StartY"]
+            $lastCount = if ($RenderState.ContainsKey("LastLineCount")) { [int]$RenderState["LastLineCount"] } else { 0 }
+            if ($lastCount -gt 0) {
+                Clear-DashboardHostUiLineRange -FromRowInclusive $startRow -ToRowInclusive ($startRow + $lastCount - 1)
+            }
+            $Host.UI.RawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates (0, $startRow)
+        } catch {
+            $canRedraw = $false
+            if ($null -ne $RenderState) { $RenderState["CanRedraw"] = $false }
+        }
+    }
+
+    if (-not $canRedraw -and $null -ne $RenderState -and -not $RenderState.ContainsKey("Initialized")) {
+        try {
+            $pos = $Host.UI.RawUI.CursorPosition
+            $RenderState["StartX"] = [int]$pos.X
+            $RenderState["StartY"] = [int]$pos.Y
+            $RenderState["CanRedraw"] = $true
+        } catch {
+            $RenderState["CanRedraw"] = $false
+        }
+    }
+
+    foreach ($line in @($lines)) {
+        if ([string]::IsNullOrEmpty([string]$line.Color)) {
+            Write-Host ([string]$line.Text)
+        } else {
+            Write-Host ([string]$line.Text) -ForegroundColor ([string]$line.Color)
+        }
+    }
+    if ($null -ne $RenderState) {
+        $RenderState["Initialized"] = $true
+        $RenderState["LastLineCount"] = @($lines).Count
+    }
+}
+
+function Invoke-DashboardStopGatesPhase {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][array]$Operations,
+        [psobject]$Workspaces = $null,
+        [scriptblock]$ReadKeyScript = $null,
+        [hashtable]$RenderState = $null
+    )
+
+    $items = @(Resolve-DashboardManualGateItems -Operations $Operations -Workspaces $Workspaces)
+    if ($items.Count -eq 0) {
+        return [pscustomobject]@{ Continue = $true; HandledOperationKeys = @{}; GateCount = 0 }
+    }
+
+    $handled = @{}
+    foreach ($item in @($items)) {
+        $item.Status = "Running"
+        $confirmed = $false
+        $timeout = [int]$item.TimeoutSeconds
+        if ($timeout -lt 0) { $timeout = 0 }
+        $deadline = [DateTime]::UtcNow.AddSeconds($timeout)
+        $lastShownRemaining = -1
+        while (-not $confirmed) {
+            $remaining = [int][Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalSeconds)
+            if ($remaining -lt 0) { $remaining = 0 }
+            if ($remaining -ne $lastShownRemaining) {
+                $filled = [int][Math]::Floor(((($timeout - $remaining) * 100.0) / [Math]::Max($timeout, 1)) / 2.0)
+                if ($filled -lt 0) { $filled = 0 }
+                if ($filled -gt 50) { $filled = 50 }
+                $item.WaitingText = ("Waiting... ({0}s) {1}" -f $remaining, ("#" * $filled))
+                Write-DashboardStopGatesDisplay -GateItems $items -RenderState $RenderState -UseCursorRedraw
+                $lastShownRemaining = $remaining
+            }
+            if ($timeout -eq 0 -or [DateTime]::UtcNow -ge $deadline) {
+                break
+            }
+            if ($null -ne $ReadKeyScript) {
+                $keyInfo = & $ReadKeyScript
+                if ($null -ne $keyInfo) {
+                    if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
+                        $item.Status = "Aborted"
+                        $item.WaitingText = ""
+                        Write-DashboardStopGatesDisplay -GateItems $items -RenderState $RenderState -UseCursorRedraw
+                        return [pscustomobject]@{ Continue = $false; HandledOperationKeys = $handled; GateCount = $items.Count }
+                    }
+                    if ($keyInfo.Key -eq [ConsoleKey]::Spacebar) {
+                        $confirmed = $true
+                        break
+                    }
+                }
+            } else {
+                try {
+                    if ([Console]::KeyAvailable) {
+                        $keyInfo = [Console]::ReadKey($true)
+                        if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
+                            $item.Status = "Aborted"
+                            $item.WaitingText = ""
+                            Write-DashboardStopGatesDisplay -GateItems $items -RenderState $RenderState -UseCursorRedraw
+                            return [pscustomobject]@{ Continue = $false; HandledOperationKeys = $handled; GateCount = $items.Count }
+                        }
+                        if ($keyInfo.Key -eq [ConsoleKey]::Spacebar) {
+                            $confirmed = $true
+                            break
+                        }
+                    }
+                } catch {
+                }
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        $item.Status = "Done"
+        $item.WaitingText = ""
+        foreach ($op in @($Operations)) {
+            if ([string]$op.ProfileType -ne "App_Workload") { continue }
+            if ([string]$op.Action -ne "Stop") { continue }
+            if ([string]$op.WorkspaceName -ne [string]$item.WorkspaceName) { continue }
+            if ([string]$op.ExecutionScope -ne [string]$item.ExecutionScope) { continue }
+            $handled[(Get-DashboardCommitOperationKey -Operation $op)] = $true
+        }
+        Write-DashboardStopGatesDisplay -GateItems $items -RenderState $RenderState -UseCursorRedraw
+    }
+
+    return [pscustomobject]@{ Continue = $true; HandledOperationKeys = $handled; GateCount = $items.Count }
+}
+
 function Classify-DashboardOperationFailure {
     [CmdletBinding()]
     param(
@@ -1603,19 +1868,35 @@ function Invoke-DashboardOperationWithRecovery {
         [Parameter(Mandatory = $true)]
         [hashtable]$RenderState,
         [psobject]$Workspaces = $null,
-        [scriptblock]$ReadKeyScript = $null
+        [scriptblock]$ReadKeyScript = $null,
+        [switch]$SkipManualStopGate
     )
 
     $attempts = 0
     $rigShiftWaitSkipped = "RigShift: Service wait skipped by user."
     $rigShiftWaitAborted = "RigShift: Service wait aborted by user."
+    $rigShiftManualGateAborted = "RigShift: Manual stop gate aborted by user."
     while ($true) {
         $attempts++
+        $operationUsesManualGate = ((Test-DashboardOperationUsesManualGate -Operation $Operation -Workspaces $Workspaces) -and -not $SkipManualStopGate.IsPresent)
         Set-DashboardProgressRowStatusForOperation -Rows $Rows -Operation $Operation -Status "Running"
         Write-DashboardProgressDisplay -Rows $Rows -RenderState $RenderState -UseCursorRedraw
         $interactiveWait = Test-DashboardInteractiveInputAvailable -ReadKeyScript $ReadKeyScript
         try {
-            Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName ([string]$Operation.WorkspaceName) -Action ([string]$Operation.Action) -ProfileType ([string]$Operation.ProfileType) -ExecutionScope ([string]$Operation.ExecutionScope) -SkipInterceptorSync -InteractiveServiceWait:$interactiveWait | Out-Null
+            if ($operationUsesManualGate) {
+                Clear-DashboardCommitFailurePresentation -RenderState $RenderState
+            }
+            Invoke-OrchestratorScript -OrchestratorPath $OrchestratorPath -WorkspaceName ([string]$Operation.WorkspaceName) -Action ([string]$Operation.Action) -ProfileType ([string]$Operation.ProfileType) -ExecutionScope ([string]$Operation.ExecutionScope) -SkipInterceptorSync -InteractiveServiceWait:$interactiveWait -SkipManualStopGate:$SkipManualStopGate | Out-Null
+            if ($operationUsesManualGate) {
+                Write-Host ""
+                if ($null -ne $RenderState) {
+                    [void]$RenderState.Remove("Initialized")
+                    [void]$RenderState.Remove("CanRedraw")
+                    [void]$RenderState.Remove("StartX")
+                    [void]$RenderState.Remove("StartY")
+                    [void]$RenderState.Remove("LastLineCount")
+                }
+            }
             Set-DashboardProgressRowStatusForOperation -Rows $Rows -Operation $Operation -Status "Done"
             Write-DashboardProgressDisplay -Rows $Rows -RenderState $RenderState -UseCursorRedraw
             return [pscustomobject]@{ Result = "Done"; Attempts = $attempts; FailureCategory = "" }
@@ -1626,6 +1907,7 @@ function Invoke-DashboardOperationWithRecovery {
                 $m = [string]$exWalk.Message
                 if ($m -eq $rigShiftWaitSkipped) { $rigShiftOutcome = "Skipped"; break }
                 if ($m -eq $rigShiftWaitAborted) { $rigShiftOutcome = "Aborted"; break }
+                if ($m -eq $rigShiftManualGateAborted) { $rigShiftOutcome = "Aborted"; break }
                 $exWalk = $exWalk.InnerException
             }
             if ($rigShiftOutcome -eq "Skipped") {
@@ -1936,8 +2218,26 @@ function Invoke-DashboardCommitOperations {
 
     $rows = @(New-DashboardCommitProgressRows -Operations $Operations -Workspaces $Workspaces)
     $renderState = @{}
-    Write-DashboardProgressDisplay -Rows $rows -RenderState $renderState
+    $gateRenderState = @{}
     $outcomes = [System.Collections.Generic.List[object]]::new()
+    $gatePhase = Invoke-DashboardStopGatesPhase -Operations $Operations -Workspaces $Workspaces -ReadKeyScript $ReadKeyScript -RenderState $gateRenderState
+    $handledGateKeys = if ($null -ne $gatePhase -and $null -ne $gatePhase.HandledOperationKeys) { $gatePhase.HandledOperationKeys } else { @{} }
+    if ($null -ne $gatePhase -and $gatePhase.Continue -ne $true) {
+        $outcomes.Add([pscustomobject]@{
+            OperationKey = "STOP_GATES"
+            Result = "Aborted"
+            Attempts = 1
+            FailureCategory = "ManualGateAborted"
+        })
+        Write-DashboardCommitRecoverySummary -Outcomes @($outcomes)
+        return @($outcomes)
+    }
+    if ($null -ne $gatePhase -and [int]$gatePhase.GateCount -gt 0) {
+        Write-Host ""
+        Write-DashboardProgressDisplay -Rows $rows -RenderState $renderState
+    } else {
+        Write-DashboardProgressDisplay -Rows $rows -RenderState $renderState
+    }
     foreach ($op in @($Operations)) {
         $opKey = Get-DashboardCommitOperationKey -Operation $op
         if ($decisions.ContainsKey($opKey) -and [string]$decisions[$opKey] -eq "SkipOperation") {
@@ -1952,7 +2252,8 @@ function Invoke-DashboardCommitOperations {
             continue
         }
 
-        $result = Invoke-DashboardOperationWithRecovery -Operation $op -OrchestratorPath $OrchestratorPath -Rows $rows -RenderState $renderState -Workspaces $Workspaces -ReadKeyScript $ReadKeyScript
+        $skipManualGateForOp = $handledGateKeys.ContainsKey($opKey)
+        $result = Invoke-DashboardOperationWithRecovery -Operation $op -OrchestratorPath $OrchestratorPath -Rows $rows -RenderState $renderState -Workspaces $Workspaces -ReadKeyScript $ReadKeyScript -SkipManualStopGate:$skipManualGateForOp
         $outcomes.Add([pscustomobject]@{
             OperationKey = Get-DashboardCommitOperationKey -Operation $op
             Result = [string]$result.Result
@@ -2280,6 +2581,12 @@ function Get-DashboardActionDefinitions {
             ActionId    = "Reset_Interceptors"
             Description = "Resets managed IFEO hooks, disables interceptors, and stops interceptor helper polling processes."
             Example     = "Use when interception is stuck or looping."
+        },
+        [pscustomobject]@{
+            Key         = "Reset_Network_Config"
+            ActionId    = "Reset_Network_Config"
+            Description = "Resets adapter DNS servers and IP addressing to automatic (DHCP), then flushes DNS cache."
+            Example     = "Use after VPN/manual network experiments to restore default networking."
         }
     )
 }
@@ -2468,6 +2775,14 @@ function Invoke-DashboardActionById {
                 Result  = $result
             }
         }
+        "Reset_Network_Config" {
+            $result = Invoke-DashboardGlobalNetworkReset
+            return [pscustomobject]@{
+                Success = $true
+                Message = ("Network reset complete. Updated {0} adapter(s)." -f [int]$result.AdapterCount)
+                Result  = $result
+            }
+        }
         default {
             throw "Fatal: Unknown dashboard action '$ActionId'."
         }
@@ -2641,6 +2956,52 @@ function Invoke-DashboardGlobalInterceptorReset {
     return [pscustomobject]@{
         DisabledInterceptors = $true
         KilledProcessCount   = [int]$killedCount
+    }
+}
+
+function Invoke-DashboardGlobalNetworkReset {
+    [CmdletBinding()]
+    param()
+
+    $scriptBody = @'
+$ErrorActionPreference = "Continue"
+$count = 0
+$adapters = @(
+    Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+        Where-Object { $_.Status -ne "Disabled" }
+)
+foreach ($adapter in $adapters) {
+    $idx = $adapter.ifIndex
+    if ($null -eq $idx) { continue }
+    Set-DnsClientServerAddress -InterfaceIndex $idx -ResetServerAddresses -ErrorAction SilentlyContinue | Out-Null
+    Set-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue | Out-Null
+    Set-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv6 -Dhcp Enabled -ErrorAction SilentlyContinue | Out-Null
+    $count++
+}
+ipconfig /flushdns | Out-Null
+Write-Output $count
+'@
+
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($scriptBody))
+    $LASTEXITCODE = 0
+    $output = & gsudo powershell -NoProfile -EncodedCommand $encoded 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $detail = if ($null -ne $output) { (@($output) -join "; ") } else { "(no output)" }
+        throw "Fatal: Network reset failed. $detail"
+    }
+
+    $adapterCount = 0
+    if ($null -ne $output) {
+        foreach ($line in @($output)) {
+            $num = 0
+            if ([int]::TryParse([string]$line, [ref]$num)) {
+                $adapterCount = $num
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        AdapterCount = [int]$adapterCount
     }
 }
 

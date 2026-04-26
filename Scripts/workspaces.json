@@ -113,7 +113,7 @@
       ],
       "action_override_off": [
         "gsudo taskkill /F /IM main.exe"
-      ] 
+      ]
     }
   },
   "System_Modes": {
@@ -237,6 +237,33 @@
       }
     },
     "Tools": {
+      "Cloudflare_Warp": {
+        "description": "Cloudflare WARP VPN service and desktop client.",
+        "services": [
+          "CloudflareWARP"
+        ],
+        "executables": [
+          "'C:/Program Files/Cloudflare/Cloudflare WARP/Cloudflare WARP.exe'"
+        ],
+        "tags": [
+          "vpn",
+          "network",
+          "cloudflare"
+        ],
+        "priority": 15,
+        "favorite": true,
+        "hidden": false,
+        "aliases": [
+          "Cloudflare Warp",
+          "WARP"
+        ],
+        "stop_manual_gate_executables": {
+          "enabled": true,
+          "message": "Please disconnect VPN in the Cloudflare WARP app, then return here and press Space.",
+          "timeout_seconds": 60,
+          "confirm_key": "Space"
+        }
+      },
       "StarDesk": {
         "description": "StarDesk service and desktop app workload.",
         "services": [

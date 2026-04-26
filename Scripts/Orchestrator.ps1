@@ -15,7 +15,9 @@ param(
 
     [switch]$SkipInterceptorSync,
 
-    [switch]$InteractiveServiceWait
+    [switch]$InteractiveServiceWait,
+
+    [switch]$SkipManualStopGate
 )
 
 Set-StrictMode -Version Latest
@@ -106,6 +108,215 @@ $script:IfeoRegistryRoot = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\I
 $script:OrchestratorInteractiveServiceWait = $InteractiveServiceWait.IsPresent
 $script:RigShiftServiceWaitSkippedMessage = "RigShift: Service wait skipped by user."
 $script:RigShiftServiceWaitAbortedMessage = "RigShift: Service wait aborted by user."
+$script:RigShiftManualGateAbortedMessage = "RigShift: Manual stop gate aborted by user."
+
+function Resolve-OrchestratorManualGateConfirmKey {
+    param([AllowEmptyString()][string]$ConfirmKey)
+
+    $raw = [string]$ConfirmKey
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return [pscustomobject]@{ Key = [ConsoleKey]::Spacebar; Label = "Space" }
+    }
+    switch ($raw.Trim().ToLowerInvariant()) {
+        "space" { return [pscustomobject]@{ Key = [ConsoleKey]::Spacebar; Label = "Space" } }
+        "spacebar" { return [pscustomobject]@{ Key = [ConsoleKey]::Spacebar; Label = "Space" } }
+        default { return [pscustomobject]@{ Key = [ConsoleKey]::Spacebar; Label = "Space" } }
+    }
+}
+
+function Resolve-OrchestratorStopManualGateForScope {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][psobject]$Workload,
+        [Parameter(Mandatory)][ValidateSet("Executables", "Services")][string]$Scope
+    )
+
+    $specificPropName = if ($Scope -eq "Executables") { "stop_manual_gate_executables" } else { "stop_manual_gate_services" }
+    $specificProp = $Workload.PSObject.Properties[$specificPropName]
+    if ($null -ne $specificProp -and $null -ne $specificProp.Value) {
+        return $specificProp.Value
+    }
+
+    $fallbackProp = $Workload.PSObject.Properties["stop_manual_gate"]
+    if ($null -ne $fallbackProp -and $null -ne $fallbackProp.Value) {
+        return $fallbackProp.Value
+    }
+
+    return $null
+}
+
+function Split-OrchestratorTextForConsoleWidth {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][int]$MaxWidth
+    )
+
+    if ($MaxWidth -le 1) {
+        return @([string]$Text)
+    }
+    $result = [System.Collections.Generic.List[string]]::new()
+    $remaining = [string]$Text
+    while (-not [string]::IsNullOrEmpty($remaining)) {
+        if ($remaining.Length -le $MaxWidth) {
+            $result.Add($remaining)
+            break
+        }
+        $slice = $remaining.Substring(0, $MaxWidth)
+        $breakIdx = $slice.LastIndexOf(" ")
+        if ($breakIdx -lt 10) {
+            $breakIdx = $MaxWidth
+        }
+        $line = $remaining.Substring(0, $breakIdx).Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            $line = $remaining.Substring(0, [Math]::Min($remaining.Length, $MaxWidth))
+        }
+        $result.Add($line)
+        $remaining = $remaining.Substring([Math]::Min($remaining.Length, $breakIdx)).TrimStart()
+    }
+    if ($result.Count -eq 0) {
+        $result.Add("")
+    }
+    return @($result)
+}
+
+function Invoke-OrchestratorManualStopGate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$WorkspaceName,
+        [Parameter(Mandatory)][psobject]$StopManualGate
+    )
+
+    if ($null -eq $StopManualGate) { return }
+    $enabledProp = $StopManualGate.PSObject.Properties["enabled"]
+    if ($null -eq $enabledProp -or $enabledProp.Value -ne $true) { return }
+
+    $message = "Please perform manual shutdown and then confirm."
+    $messageProp = $StopManualGate.PSObject.Properties["message"]
+    if ($null -ne $messageProp -and -not [string]::IsNullOrWhiteSpace([string]$messageProp.Value)) {
+        $message = [string]$messageProp.Value
+    }
+
+    $timeoutSeconds = 60
+    $timeoutProp = $StopManualGate.PSObject.Properties["timeout_seconds"]
+    if ($null -ne $timeoutProp) {
+        $parsed = 0
+        if ([int]::TryParse([string]$timeoutProp.Value, [ref]$parsed)) {
+            if ($parsed -lt 0) { $parsed = 0 }
+            $timeoutSeconds = $parsed
+        }
+    }
+
+    $confirmRaw = ""
+    $confirmProp = $StopManualGate.PSObject.Properties["confirm_key"]
+    if ($null -ne $confirmProp) {
+        $confirmRaw = [string]$confirmProp.Value
+    }
+    $confirm = Resolve-OrchestratorManualGateConfirmKey -ConfirmKey $confirmRaw
+
+    if ($timeoutSeconds -le 0) {
+        Write-Host "Manual stop gate auto-continued after 0s." -ForegroundColor DarkYellow
+        return
+    }
+
+    $deadline = [datetime]::UtcNow.AddSeconds($timeoutSeconds)
+    $confirmed = $false
+    $lastSecondShown = -1
+    $lineWidth = 0
+    $canUseTransientBlock = $false
+    $blockStartTop = -1
+    $messageLines = @()
+    try {
+        $lineWidth = [Console]::WindowWidth
+        if ($lineWidth -gt 20) {
+            $canUseTransientBlock = $true
+            $messageLines = @(Split-OrchestratorTextForConsoleWidth -Text $message -MaxWidth ($lineWidth - 1))
+            $blockStartTop = [Console]::CursorTop
+            foreach ($ml in $messageLines) {
+                Write-Host $ml -ForegroundColor Yellow
+            }
+            Write-Host "" -ForegroundColor DarkGray
+        }
+    } catch {
+        $canUseTransientBlock = $false
+    }
+    while ([datetime]::UtcNow -lt $deadline) {
+        $remaining = [Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalSeconds)
+        if ($remaining -lt 0) { $remaining = 0 }
+        if ($remaining -ne $lastSecondShown) {
+            $countdownText = ("Manual stop gate [{0}s] Press {1} confirm, Esc abort" -f [int]$remaining, [string]$confirm.Label)
+            if ($lineWidth -gt 1 -and $countdownText.Length -ge ($lineWidth - 1)) {
+                $countdownText = $countdownText.Substring(0, $lineWidth - 1)
+            }
+            $padding = ""
+            if ($lineWidth -gt 1) {
+                $padCount = [Math]::Max(0, ($lineWidth - 1) - $countdownText.Length)
+                if ($padCount -gt 0) {
+                    $padding = (" " * $padCount)
+                }
+            }
+            if ($canUseTransientBlock -and $blockStartTop -ge 0) {
+                try {
+                    $countdownRow = $blockStartTop + @($messageLines).Count
+                    [Console]::SetCursorPosition(0, $countdownRow)
+                    [Console]::Write(("{0}{1}" -f $countdownText, $padding))
+                } catch {
+                    [Console]::Write(("`r{0}{1}" -f $countdownText, $padding))
+                }
+            } else {
+                [Console]::Write(("`r{0}{1}" -f $countdownText, $padding))
+            }
+            $lastSecondShown = $remaining
+        }
+
+        try {
+            if ([Console]::KeyAvailable) {
+                $keyInfo = [Console]::ReadKey($true)
+                if ($keyInfo.Key -eq $confirm.Key) {
+                    $confirmed = $true
+                    break
+                }
+                if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
+                    throw $script:RigShiftManualGateAbortedMessage
+                }
+            }
+        } catch {
+            if ([string]$_.Exception.Message -eq $script:RigShiftManualGateAbortedMessage) {
+                throw
+            }
+            # Non-interactive console; only timeout fallback is available.
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    if ($canUseTransientBlock -and $blockStartTop -ge 0 -and $lineWidth -gt 1) {
+        try {
+            $rowsToClear = @($messageLines).Count + 1
+            for ($i = 0; $i -lt $rowsToClear; $i++) {
+                [Console]::SetCursorPosition(0, ($blockStartTop + $i))
+                [Console]::Write((" " * ($lineWidth - 1)))
+            }
+            [Console]::SetCursorPosition(0, $blockStartTop)
+        } catch {
+            if ($lineWidth -gt 1) {
+                [Console]::Write(("`r{0}`r" -f (" " * ($lineWidth - 1))))
+            } else {
+                [Console]::Write("`r")
+            }
+        }
+    } else {
+        if ($lineWidth -gt 1) {
+            [Console]::Write(("`r{0}`r" -f (" " * ($lineWidth - 1))))
+        } else {
+            [Console]::Write("`r")
+        }
+    }
+    if ($confirmed) {
+        Write-Host "Manual stop gate successful." -ForegroundColor Green
+    } else {
+        Write-Host ("Manual stop gate auto-continued after {0}s." -f [int]$timeoutSeconds) -ForegroundColor DarkYellow
+    }
+}
 
 function Wait-OrchestratorServiceDesiredStatus {
     param(
@@ -692,6 +903,10 @@ if ($resolvedProfileType -eq "App_Workload") {
         }
     } else {
         if ($runExecutables) {
+            $exeGate = Resolve-OrchestratorStopManualGateForScope -Workload $resolvedProfileData -Scope Executables
+            if (-not $SkipManualStopGate.IsPresent -and $null -ne $exeGate) {
+                Invoke-OrchestratorManualStopGate -WorkspaceName $WorkspaceName -StopManualGate $exeGate
+            }
             $executables = @(Get-JsonObjectOptionalStringArray -InputObject $resolvedProfileData -PropertyName "executables")
             $repoRootStop = $script:OrchestratorRepoRoot
             if ([string]::IsNullOrWhiteSpace($repoRootStop)) {
@@ -711,6 +926,10 @@ if ($resolvedProfileType -eq "App_Workload") {
             }
         }
         if ($runServices) {
+            $svcGate = Resolve-OrchestratorStopManualGateForScope -Workload $resolvedProfileData -Scope Services
+            if (-not $SkipManualStopGate.IsPresent -and $null -ne $svcGate) {
+                Invoke-OrchestratorManualStopGate -WorkspaceName $WorkspaceName -StopManualGate $svcGate
+            }
             foreach ($serviceName in @(Get-JsonObjectOptionalStringArray -InputObject $resolvedProfileData -PropertyName "services")) {
                 if ([string]::IsNullOrWhiteSpace([string]$serviceName)) { continue }
                 Invoke-ElevatedServiceLifecycle -ServiceName ([string]$serviceName) -Operation Stop

@@ -671,6 +671,28 @@ Describe "Dashboard Tab 4 Settings" {
         Assert-MockCalled -CommandName Invoke-DashboardGlobalInterceptorReset -Times 1 -Exactly
     }
 
+    It "registers Reset_Network_Config as a tab 4 action" {
+        $actions = @(Get-DashboardActionDefinitions)
+        $hit = @($actions | Where-Object { $_.ActionId -eq "Reset_Network_Config" })
+        $hit.Count | Should -Be 1
+        [string]$hit[0].Description | Should -Match "DNS"
+    }
+
+    It "dispatches Reset_Network_Config action through action dispatcher" {
+        $queue = @{}
+        $rows = @([pscustomobject]@{ Key = "enable_interceptors"; Type = "bool"; CurrentValue = $true; Value = $true })
+        $workspaces = [pscustomobject]@{ _config = [pscustomobject]@{ enable_interceptors = $true } }
+        Mock -CommandName Invoke-DashboardGlobalNetworkReset -MockWith {
+            return [pscustomobject]@{ AdapterCount = 3 }
+        }
+
+        $result = Invoke-DashboardActionById -ActionId "Reset_Network_Config" -SettingsRows $rows -JsonPath "C:\fake\workspaces.json" -Workspaces $workspaces -PendingHardwareChanges $queue -OrchestratorPath "C:\fake\Orchestrator.ps1"
+
+        $result.Success | Should -BeTrue
+        $result.Message | Should -Match 'Updated 3 adapter'
+        Assert-MockCalled -CommandName Invoke-DashboardGlobalNetworkReset -Times 1 -Exactly
+    }
+
     It "requires non-empty value for shortcut prefix settings" {
         $required = [pscustomobject]@{ Key = "shortcut_prefix_start"; Type = "string"; Value = "!Start-" }
         $optional = [pscustomobject]@{ Key = "console_style"; Type = "choice"; Value = "Normal" }
@@ -871,8 +893,8 @@ Describe "Dashboard scope-gated sequencer (integrated)" {
         @($printed | Where-Object { $_ -eq "STARTING SERVICES" }).Count | Should -BeGreaterThan 0
         @($printed | Where-Object { $_ -eq "STARTING EXECUTABLES" }).Count | Should -BeGreaterThan 0
         @($printed | Where-Object { $_ -like "*> Phase *" }).Count | Should -Be 0
-        @($printed | Where-Object { $_ -like "- Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
-        @($printed | Where-Object { $_ -like "- Start Office: starting executable ONEDRIVE" }).Count | Should -BeGreaterThan 0
+        @($printed | Where-Object { $_ -like "- | Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
+        @($printed | Where-Object { $_ -like "- | Start Office: starting executable ONEDRIVE" }).Count | Should -BeGreaterThan 0
     }
 
     It "transitions visible task status from pending to running to done" {
@@ -928,8 +950,8 @@ Describe "Dashboard scope-gated sequencer (integrated)" {
 
         Invoke-DashboardCommitOperations -Operations $operations -OrchestratorPath "C:\fake\Orchestrator.ps1" -Workspaces $workspaces
 
-        @($printed | Where-Object { $_ -like "-> Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
-        @($printed | Where-Object { $_ -like "OK Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
+        @($printed | Where-Object { $_ -like "-> | Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
+        @($printed | Where-Object { $_ -like "OK | Start Office: starting service ClickToRunSvc" }).Count | Should -BeGreaterThan 0
     }
 
     It "falls back to append rendering when cursor redraw is unavailable" {
@@ -950,7 +972,7 @@ Describe "Dashboard scope-gated sequencer (integrated)" {
         Write-DashboardProgressDisplay -Rows $rows -RenderState $renderState -UseCursorRedraw
 
         @($printed | Where-Object { $_ -eq "STARTING SERVICES" }).Count | Should -Be 2
-        @($printed | Where-Object { $_ -like "-> Start Office: starting service ClickToRunSvc" }).Count | Should -Be 1
+        @($printed | Where-Object { $_ -like "-> | Start Office: starting service ClickToRunSvc" }).Count | Should -Be 1
     }
 
     It "shows baseline failure recovery options for operation failures" {
@@ -1106,6 +1128,29 @@ Describe "Dashboard scope-gated sequencer (integrated)" {
 
         $readKey = { [pscustomobject]@{ KeyChar = [char]0; Key = [ConsoleKey]::Escape } }
         $result = @(Invoke-DashboardCommitOperations -Operations $operations -OrchestratorPath "C:\fake\Orchestrator.ps1" -Workspaces $workspaces -ReadKeyScript $readKey)
+        Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly
+        $result.Count | Should -Be 1
+        $result[0].Result | Should -Be "Aborted"
+    }
+
+    It "aborts commit when orchestrator throws manual stop gate abort sentinel" {
+        $workspaces = [pscustomobject]@{
+            _config = [pscustomobject]@{ commit_error_policy = "Prompt" }
+            App_Workloads = [pscustomobject]@{}
+            Hardware_Definitions = [pscustomobject]@{}
+            System_Modes = [pscustomobject]@{}
+        }
+        $operations = @(
+            [pscustomobject]@{ Phase = 1; WorkspaceName = "Cloudflare_Warp"; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ExecutablesOnly"; Reason = "Stop Cloudflare_Warp" },
+            [pscustomobject]@{ Phase = 2; WorkspaceName = "Cloudflare_Warp"; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ServicesOnly"; Reason = "Stop Cloudflare_Warp" }
+        )
+        Mock -CommandName Invoke-OrchestratorScript -MockWith {
+            throw "RigShift: Manual stop gate aborted by user."
+        }
+        Mock -CommandName Start-Sleep -MockWith { }
+        Mock -CommandName Write-Host -MockWith { }
+
+        $result = @(Invoke-DashboardCommitOperations -Operations $operations -OrchestratorPath "C:\fake\Orchestrator.ps1" -Workspaces $workspaces)
         Assert-MockCalled -CommandName Invoke-OrchestratorScript -Times 1 -Exactly
         $result.Count | Should -Be 1
         $result[0].Result | Should -Be "Aborted"

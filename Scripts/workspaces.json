@@ -83,6 +83,13 @@
         "*Windows Hello*"
       ]
     },
+    "NVIDIA_RTX_4050_Laptop_GPU": {
+      "description": "Discrete NVIDIA laptop GPU device toggle for power/performance mode policies.",
+      "type": "pnp_device",
+      "match": [
+        "*NVIDIA GeForce*"
+      ]
+    },
     "Display_High_Refresh_Rate": {
       "description": "High-refresh display mode state (above 60 Hz detected as ON).",
       "type": "stateless",
@@ -131,6 +138,7 @@
         "Bluetooth_Radio": "ON",
         "Battery_ACPI": "ON",
         "Other_Peripherals": "ON",
+        "NVIDIA_RTX_4050_Laptop_GPU": "ON",
         "Display_High_Refresh_Rate": "ON",
         "Gigabyte_Control_Center": "ON",
         "Gigabyte_Fan_Battery_Control": "OFF"
@@ -151,6 +159,7 @@
         "Bluetooth_Radio": "OFF",
         "Battery_ACPI": "OFF",
         "Other_Peripherals": "OFF",
+        "NVIDIA_RTX_4050_Laptop_GPU": "ON",
         "Display_High_Refresh_Rate": "OFF",
         "Gigabyte_Control_Center": "OFF",
         "Gigabyte_Fan_Battery_Control": "ON"
@@ -170,6 +179,7 @@
         "Bluetooth_Radio": "ANY",
         "Battery_ACPI": "ANY",
         "Other_Peripherals": "OFF",
+        "NVIDIA_RTX_4050_Laptop_GPU": "OFF",
         "Display_High_Refresh_Rate": "ANY",
         "Gigabyte_Control_Center": "OFF",
         "Gigabyte_Fan_Battery_Control": "ON"

@@ -1054,6 +1054,20 @@ Describe "Orchestrator Dictionary/Matrix Execution" {
         (@($decodedCalls | Where-Object { $_ -match 'Image File Execution Options\\POWERPNT\.EXE' })).Count | Should -Be 0
         Remove-Variable -Name gsudoCalls -Scope Global -ErrorAction SilentlyContinue
     }
+
+    It "declares RTX 4050 mode policy in default configuration" {
+        $config = Get-Content -Path $script:backupPath -Raw | ConvertFrom-Json
+
+        $gpuDefinition = $config.Hardware_Definitions.NVIDIA_RTX_4050_Laptop_GPU
+        $gpuDefinition | Should -Not -BeNullOrEmpty
+        $gpuDefinition.type | Should -Be "pnp_device"
+        @($gpuDefinition.match) | Should -Contain "*RTX 4050*"
+        @($gpuDefinition.match) | Should -Contain "*NVIDIA*RTX*4050*Laptop GPU*"
+
+        $config.System_Modes.Eco_Life.hardware_targets.NVIDIA_RTX_4050_Laptop_GPU | Should -Be "OFF"
+        $config.System_Modes.Normal_Life.hardware_targets.NVIDIA_RTX_4050_Laptop_GPU | Should -Be "ON"
+        $config.System_Modes.Live_Stage_Life.hardware_targets.NVIDIA_RTX_4050_Laptop_GPU | Should -Be "ON"
+    }
 }
 
 

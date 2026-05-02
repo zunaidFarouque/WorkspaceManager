@@ -52,6 +52,15 @@ Third-party security tools may still flag Debugger-based redirection.
 
 If environment variable **`RigShift_InterceptorBypass=1`** is set in the process environment when `Interceptor.ps1` runs, the script launches the target executable immediately without readiness polling or workload activation. Intended for troubleshooting only; not a supported configuration surface in `workspaces.json`.
 
+### Elevation attribution and gsudo cache
+
+`Interceptor.ps1` invokes `gsudo` for several operations: starting required services, setting Disabled services to Manual, launching `admin:` executables, and toggling the managed IFEO `Debugger` value around the real launch (recursion safety). Some of these may occur even on the "rule already active" path, so a UAC prompt can appear without the main Yes/No/Cancel dialog being shown first. To make the source of that UAC prompt obvious, the interceptor probes `gsudo status --json` before each elevated call:
+
+- `CacheAvailable: true` (warm cache) - no window is shown; gsudo runs silently as before.
+- `CacheAvailable: false` (cold cache) - a small top-most window appears in the bottom-right naming the workload and the operation, then gsudo proceeds. The window auto-dismisses after ~2.5s (or sooner once gsudo returns).
+
+Probing adds roughly 50 ms per cold check. Set `_config.elevation_attribution = false` to disable the window entirely. Note that this only attributes elevation; it does not avoid it. Removing UAC prompts on the active-rule path requires a privileged broker (out of scope for this script).
+
 ---
 
 ## 8. `@alias` wildcard expansion risk

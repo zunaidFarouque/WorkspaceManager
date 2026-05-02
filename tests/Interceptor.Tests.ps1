@@ -448,4 +448,283 @@ Describe "Interceptor workload resolution and flow" {
     }
 }
 
+Describe "Interceptor elevation attribution" {
+    BeforeAll {
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Interceptor.ps1")
+        $env:RigShift_InProcPolling = "1"
+    }
+
+    BeforeEach {
+        $env:RigShift_InterceptorBypass = $null
+        $env:RigShift_InProcPolling = "1"
+        function gsudo { }
+        Set-InterceptorElevationAttributionEnabled -Enabled $true
+    }
+
+    AfterEach {
+        if (Test-Path Function:\gsudo) {
+            Remove-Item Function:\gsudo
+        }
+        Set-InterceptorElevationAttributionEnabled -Enabled $true
+    }
+
+    Context "Test-GsudoCacheAvailable" {
+        It "returns true when gsudo status --json reports CacheAvailable: true" {
+            Mock -CommandName gsudo -MockWith {
+                if (($args -join " ") -match "status .*--json") {
+                    return '{"CacheAvailable":true,"IsElevated":false}'
+                }
+                return ""
+            }
+
+            (Test-GsudoCacheAvailable) | Should -BeTrue
+        }
+
+        It "returns false when gsudo status --json reports CacheAvailable: false" {
+            Mock -CommandName gsudo -MockWith {
+                if (($args -join " ") -match "status .*--json") {
+                    return '{"CacheAvailable":false,"IsElevated":false}'
+                }
+                return ""
+            }
+
+            (Test-GsudoCacheAvailable) | Should -BeFalse
+        }
+
+        It "returns false when gsudo throws" {
+            Mock -CommandName gsudo -MockWith { throw "gsudo not found" }
+
+            (Test-GsudoCacheAvailable) | Should -BeFalse
+        }
+
+        It "returns false when gsudo returns invalid JSON" {
+            Mock -CommandName gsudo -MockWith { return "not json at all" }
+
+            (Test-GsudoCacheAvailable) | Should -BeFalse
+        }
+
+        It "returns false when gsudo returns empty output" {
+            Mock -CommandName gsudo -MockWith { return "" }
+
+            (Test-GsudoCacheAvailable) | Should -BeFalse
+        }
+
+        It "returns false when JSON lacks CacheAvailable property" {
+            Mock -CommandName gsudo -MockWith { return '{"IsElevated":false}' }
+
+            (Test-GsudoCacheAvailable) | Should -BeFalse
+        }
+    }
+
+    Context "Show-InterceptorElevationToast" {
+        It "returns an object exposing a Close method" {
+            $toast = Show-InterceptorElevationToast -Reason "Test reason" -WorkloadName "TestWorkload" -AutoCloseMilliseconds 100
+            $toast | Should -Not -BeNullOrEmpty
+            { $toast.Close() } | Should -Not -Throw
+        }
+
+        It "tolerates missing WorkloadName parameter" {
+            $toast = Show-InterceptorElevationToast -Reason "Test only reason" -AutoCloseMilliseconds 100
+            $toast | Should -Not -BeNullOrEmpty
+            { $toast.Close() } | Should -Not -Throw
+        }
+    }
+
+    Context "Invoke-WithElevationAttribution dispatch" {
+        It "skips toast when Test-GsudoCacheAvailable returns true" {
+            Mock -CommandName Test-GsudoCacheAvailable -MockWith { $true }
+            Mock -CommandName Show-InterceptorElevationToast -MockWith {
+                [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name Close -Value {} -PassThru
+            }
+
+            $script:ranAction = $false
+            Invoke-WithElevationAttribution -Reason "Test" -WorkloadName "WS" -ElevatedAction { $script:ranAction = $true }
+
+            $script:ranAction | Should -BeTrue
+            Assert-MockCalled -CommandName Show-InterceptorElevationToast -Times 0 -Exactly
+        }
+
+        It "shows toast when Test-GsudoCacheAvailable returns false" {
+            Mock -CommandName Test-GsudoCacheAvailable -MockWith { $false }
+            $script:toastClosed = $false
+            Mock -CommandName Show-InterceptorElevationToast -MockWith {
+                [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name Close -Value { $script:toastClosed = $true } -PassThru
+            }
+
+            $script:ranAction = $false
+            Invoke-WithElevationAttribution -Reason "Reason A" -WorkloadName "WS A" -ElevatedAction { $script:ranAction = $true }
+
+            $script:ranAction | Should -BeTrue
+            Assert-MockCalled -CommandName Show-InterceptorElevationToast -Times 1 -Exactly -ParameterFilter {
+                $Reason -eq "Reason A" -and $WorkloadName -eq "WS A"
+            }
+            $script:toastClosed | Should -BeTrue
+        }
+
+        It "skips toast when attribution is disabled even if cache is cold" {
+            Mock -CommandName Test-GsudoCacheAvailable -MockWith { $false }
+            Mock -CommandName Show-InterceptorElevationToast -MockWith {
+                [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name Close -Value {} -PassThru
+            }
+
+            Set-InterceptorElevationAttributionEnabled -Enabled $false
+            $script:ranAction = $false
+            Invoke-WithElevationAttribution -Reason "Test" -WorkloadName "WS" -ElevatedAction { $script:ranAction = $true }
+
+            $script:ranAction | Should -BeTrue
+            Assert-MockCalled -CommandName Show-InterceptorElevationToast -Times 0 -Exactly
+        }
+
+        It "closes toast even when ElevatedAction throws" {
+            Mock -CommandName Test-GsudoCacheAvailable -MockWith { $false }
+            $script:toastClosed = $false
+            Mock -CommandName Show-InterceptorElevationToast -MockWith {
+                [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name Close -Value { $script:toastClosed = $true } -PassThru
+            }
+
+            { Invoke-WithElevationAttribution -Reason "R" -WorkloadName "W" -ElevatedAction { throw "boom" } } | Should -Throw
+
+            $script:toastClosed | Should -BeTrue
+        }
+
+        It "still runs ElevatedAction when toast creation throws" {
+            Mock -CommandName Test-GsudoCacheAvailable -MockWith { $false }
+            Mock -CommandName Show-InterceptorElevationToast -MockWith { throw "no UI" }
+
+            $script:ranAction = $false
+            { Invoke-WithElevationAttribution -Reason "R" -WorkloadName "W" -ElevatedAction { $script:ranAction = $true } } | Should -Not -Throw
+
+            $script:ranAction | Should -BeTrue
+        }
+    }
+
+    Context "Call-site routing" {
+        It "Start-RuleActivationFlow routes Set-Service Manual through Invoke-WithElevationAttribution" {
+            Mock -CommandName Get-Service -MockWith {
+                param([string]$Name)
+                if ($Name -eq "ClickToRunSvc") {
+                    return [pscustomobject]@{
+                        Name                 = "ClickToRunSvc"
+                        StartType            = "Disabled"
+                        Status               = "Stopped"
+                        ServicesDependedOn   = @()
+                    }
+                }
+                return $null
+            }
+            Mock -CommandName Show-InterceptorDisabledServicePrompt -MockWith { "Yes" }
+            Mock -CommandName gsudo -MockWith { }
+            Mock -CommandName Start-Process -MockWith { }
+
+            $script:wrapperCalls = @()
+            Mock -CommandName Invoke-WithElevationAttribution -MockWith {
+                $script:wrapperCalls += ,[pscustomobject]@{ Reason = $Reason; WorkloadName = $WorkloadName }
+                & $ElevatedAction
+            }
+
+            Start-RuleActivationFlow -RequiredServices @("ClickToRunSvc") -RequiredExecutables @() -WorkloadName "Office"
+
+            @($script:wrapperCalls | Where-Object { $_.Reason -match "Set-Service|Manual|startup" -and $_.WorkloadName -eq "Office" }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Start-RuleActivationFlow routes Start-Service through Invoke-WithElevationAttribution" {
+            Mock -CommandName Get-Service -MockWith {
+                param([string]$Name)
+                if ($Name -eq "ClickToRunSvc") {
+                    return [pscustomobject]@{
+                        Name                 = "ClickToRunSvc"
+                        StartType            = "Manual"
+                        Status               = "Stopped"
+                        ServicesDependedOn   = @()
+                    }
+                }
+                return $null
+            }
+            Mock -CommandName gsudo -MockWith { }
+            Mock -CommandName Start-Process -MockWith { }
+
+            $script:wrapperCalls = @()
+            Mock -CommandName Invoke-WithElevationAttribution -MockWith {
+                $script:wrapperCalls += ,[pscustomobject]@{ Reason = $Reason; WorkloadName = $WorkloadName }
+                & $ElevatedAction
+            }
+
+            Start-RuleActivationFlow -RequiredServices @("ClickToRunSvc") -RequiredExecutables @() -WorkloadName "Office"
+
+            @($script:wrapperCalls | Where-Object { $_.Reason -match "Start-Service|Starting service" -and $_.WorkloadName -eq "Office" }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Start-RuleActivationFlow routes admin: executable launches through Invoke-WithElevationAttribution" {
+            Mock -CommandName Get-Service -MockWith { return $null }
+            Mock -CommandName gsudo -MockWith { }
+            Mock -CommandName Start-Process -MockWith { }
+            Mock -CommandName Resolve-QuotedRelativeExecutionToken -MockWith { param($ExecutionToken) return "C:/Tools/foo.exe" }
+            Mock -CommandName Resolve-RepoRelativeFilePath -MockWith { param($Path) return $Path }
+
+            $script:wrapperCalls = @()
+            Mock -CommandName Invoke-WithElevationAttribution -MockWith {
+                $script:wrapperCalls += ,[pscustomobject]@{ Reason = $Reason; WorkloadName = $WorkloadName }
+                & $ElevatedAction
+            }
+
+            Start-RuleActivationFlow -RequiredServices @() -RequiredExecutables @("admin:C:/Tools/foo.exe") -WorkloadName "ToolsWS"
+
+            @($script:wrapperCalls | Where-Object { $_.Reason -match "admin|executable|Launching" -and $_.WorkloadName -eq "ToolsWS" }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Invoke-WithManagedIfeoTemporarilyDisabled routes IFEO disable and restore through Invoke-WithElevationAttribution" {
+            Mock -CommandName Get-ItemProperty -MockWith {
+                return [pscustomobject]@{
+                    Debugger = 'wscript.exe "C:/Some/Interceptor.vbs"'
+                    RigShift_Managed = "1"
+                }
+            }
+            Mock -CommandName gsudo -MockWith { }
+
+            $script:wrapperCalls = @()
+            Mock -CommandName Invoke-WithElevationAttribution -MockWith {
+                $script:wrapperCalls += ,[pscustomobject]@{ Reason = $Reason; WorkloadName = $WorkloadName }
+                & $ElevatedAction
+            }
+
+            $script:launchRan = $false
+            Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe "C:/Office/WINWORD.EXE" -WorkloadName "Office" -LaunchBlock { $script:launchRan = $true }
+
+            $script:launchRan | Should -BeTrue
+            @($script:wrapperCalls | Where-Object { $_.Reason -match "Disabling IFEO" -and $_.WorkloadName -eq "Office" }).Count | Should -Be 1
+            @($script:wrapperCalls | Where-Object { $_.Reason -match "Restoring IFEO" -and $_.WorkloadName -eq "Office" }).Count | Should -Be 1
+        }
+
+        It "Toast reason text references the service name and workload name" {
+            Mock -CommandName Get-Service -MockWith {
+                param([string]$Name)
+                if ($Name -eq "ClickToRunSvc") {
+                    return [pscustomobject]@{
+                        Name                 = "ClickToRunSvc"
+                        StartType            = "Manual"
+                        Status               = "Stopped"
+                        ServicesDependedOn   = @()
+                    }
+                }
+                return $null
+            }
+            Mock -CommandName gsudo -MockWith { }
+            Mock -CommandName Start-Process -MockWith { }
+
+            $script:capturedReasons = @()
+            Mock -CommandName Invoke-WithElevationAttribution -MockWith {
+                $script:capturedReasons += $Reason
+                & $ElevatedAction
+            }
+
+            Start-RuleActivationFlow -RequiredServices @("ClickToRunSvc") -RequiredExecutables @() -WorkloadName "Office"
+
+            ($script:capturedReasons -join " | ") | Should -Match "ClickToRunSvc"
+        }
+    }
+}
+
 

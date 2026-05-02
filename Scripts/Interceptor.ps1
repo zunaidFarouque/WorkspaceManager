@@ -11,6 +11,172 @@ $ErrorActionPreference = "Stop"
 
 $script:ActivationWaitTimeoutSeconds = 30
 $script:ActivationPollIntervalSeconds = 1
+$script:InterceptorElevationAttributionEnabled = $true
+
+function Set-InterceptorElevationAttributionEnabled {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]$Enabled
+    )
+
+    $script:InterceptorElevationAttributionEnabled = [bool]$Enabled
+}
+
+function Get-InterceptorElevationAttributionEnabled {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [psobject]$Workspaces
+    )
+
+    $defaultValue = $true
+    if ($null -eq $Workspaces) {
+        return $defaultValue
+    }
+
+    $configProp = $Workspaces.PSObject.Properties["_config"]
+    if ($null -eq $configProp -or $null -eq $configProp.Value) {
+        return $defaultValue
+    }
+
+    $attrProp = $configProp.Value.PSObject.Properties["elevation_attribution"]
+    if ($null -eq $attrProp) {
+        return $defaultValue
+    }
+
+    return [bool]$attrProp.Value
+}
+
+function Test-GsudoCacheAvailable {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $output = gsudo status --json 2>&1
+        $text = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+
+        $parsed = $text | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $parsed) { return $false }
+
+        $cacheProp = $parsed.PSObject.Properties["CacheAvailable"]
+        if ($null -eq $cacheProp) { return $false }
+
+        return [bool]$cacheProp.Value
+    } catch {
+        return $false
+    }
+}
+
+function Show-InterceptorElevationToast {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Reason,
+
+        [Parameter(Mandatory = $false)]
+        [string]$WorkloadName = "",
+
+        [Parameter(Mandatory = $false)]
+        [int]$AutoCloseMilliseconds = 2500
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "RigShift Elevation"
+    $form.ClientSize = New-Object System.Drawing.Size(440, 120)
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $form.TopMost = $true
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+    $form.ShowInTaskbar = $false
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+
+    try {
+        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $form.Location = New-Object System.Drawing.Point(($screen.Right - 460), ($screen.Bottom - 140))
+    } catch {
+        $form.Location = New-Object System.Drawing.Point(100, 100)
+    }
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $label.Padding = New-Object System.Windows.Forms.Padding(12, 10, 12, 10)
+    $label.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+
+    $headerLine = if ([string]::IsNullOrWhiteSpace($WorkloadName)) {
+        "RigShift: requesting admin elevation"
+    } else {
+        "RigShift: requesting admin elevation (workload: $WorkloadName)"
+    }
+    $label.Text = "$headerLine`r`n`r`n$Reason`r`n`r`nUAC dialog will appear..."
+    $form.Controls.Add($label)
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = [Math]::Max(100, [int]$AutoCloseMilliseconds)
+    $timer.Add_Tick({
+        try { $timer.Stop() } catch { }
+        try { $form.Close() } catch { }
+    })
+    $timer.Start()
+
+    try {
+        $form.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+    } catch {
+        # Headless or no UI session: form remains a no-op object whose Close() is still safe.
+    }
+
+    return $form
+}
+
+function Invoke-WithElevationAttribution {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Reason,
+
+        [Parameter(Mandatory = $false)]
+        [string]$WorkloadName = "",
+
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ElevatedAction
+    )
+
+    $toast = $null
+    $attributionEnabled = ($script:InterceptorElevationAttributionEnabled -eq $true)
+    $shouldShowToast = $false
+
+    if ($attributionEnabled) {
+        $cacheAvailable = $false
+        try {
+            $cacheAvailable = [bool](Test-GsudoCacheAvailable)
+        } catch {
+            $cacheAvailable = $false
+        }
+        $shouldShowToast = (-not $cacheAvailable)
+    }
+
+    if ($shouldShowToast) {
+        try {
+            $toast = Show-InterceptorElevationToast -Reason $Reason -WorkloadName $WorkloadName
+        } catch {
+            $toast = $null
+        }
+    }
+
+    try {
+        & $ElevatedAction
+    } finally {
+        if ($null -ne $toast) {
+            try { $toast.Close() } catch { }
+        }
+    }
+}
 
 function Get-InterceptorWorkspaces {
     [CmdletBinding()]
@@ -377,7 +543,10 @@ function Start-RuleActivationFlow {
                 $script:InterceptorUserCancelledDisabledRemediation = $true
                 return
             }
-            gsudo Set-Service -Name $blocker -StartupType Manual 2>&1 | Out-Null
+            $reason = "Set-Service '$blocker' startup type to Manual (required for service '$svc')"
+            Invoke-WithElevationAttribution -Reason $reason -WorkloadName $WorkloadName -ElevatedAction {
+                gsudo Set-Service -Name $blocker -StartupType Manual 2>&1 | Out-Null
+            }
         }
 
         $remainingBlockers = @(Get-InterceptorDisabledServiceBlockers -ServiceName $svc)
@@ -387,7 +556,10 @@ function Start-RuleActivationFlow {
         }
 
         $global:LASTEXITCODE = 0
-        gsudo Start-Service -Name $svc 2>&1 | Out-Null
+        $startReason = "Start-Service '$svc' for workload activation"
+        Invoke-WithElevationAttribution -Reason $startReason -WorkloadName $WorkloadName -ElevatedAction {
+            gsudo Start-Service -Name $svc 2>&1 | Out-Null
+        }
         $script:InterceptorDidRunGsudoStartService = $true
     }
 
@@ -431,7 +603,11 @@ function Start-RuleActivationFlow {
                 $escaped = $argumentList.Replace('"', '`"')
                 "Start-Process -FilePath `"$filePath`" -ArgumentList `"$escaped`""
             }
-            gsudo pwsh.exe -NoProfile -WindowStyle Hidden -Command $cmd 2>&1 | Out-Null
+            $execLeaf = [System.IO.Path]::GetFileName($filePath)
+            $adminReason = "Launching admin executable '$execLeaf' for workload"
+            Invoke-WithElevationAttribution -Reason $adminReason -WorkloadName $WorkloadName -ElevatedAction {
+                gsudo pwsh.exe -NoProfile -WindowStyle Hidden -Command $cmd 2>&1 | Out-Null
+            }
         } else {
             if ([string]::IsNullOrWhiteSpace($argumentList)) {
                 Start-Process -FilePath $filePath 2>&1 | Out-Null
@@ -561,7 +737,9 @@ function Invoke-WithManagedIfeoTemporarilyDisabled {
         [Parameter(Mandatory = $true)]
         [string]$TargetExe,
         [Parameter(Mandatory = $true)]
-        [scriptblock]$LaunchBlock
+        [scriptblock]$LaunchBlock,
+        [Parameter(Mandatory = $false)]
+        [string]$WorkloadName = ""
     )
 
     $targetLeaf = [System.IO.Path]::GetFileName($TargetExe)
@@ -598,11 +776,18 @@ function Invoke-WithManagedIfeoTemporarilyDisabled {
     $disableCmd = "Remove-ItemProperty -Path '$escapedPath' -Name 'Debugger' -ErrorAction SilentlyContinue; Remove-ItemProperty -Path '$escapedPath' -Name 'RigShift_Managed' -ErrorAction SilentlyContinue"
     $restoreCmd = "New-Item -Path '$escapedPath' -Force | Out-Null; New-ItemProperty -Path '$escapedPath' -Name 'Debugger' -Value '$escapedDebugger' -PropertyType String -Force | Out-Null; New-ItemProperty -Path '$escapedPath' -Name 'RigShift_Managed' -Value '$escapedManaged' -PropertyType String -Force | Out-Null"
 
+    $disableReason = "Disabling IFEO hook for '$targetLeaf' to launch target without recursion"
+    $restoreReason = "Restoring IFEO hook for '$targetLeaf' after launch"
+
     try {
-        gsudo pwsh.exe -NoProfile -Command $disableCmd 2>&1 | Out-Null
+        Invoke-WithElevationAttribution -Reason $disableReason -WorkloadName $WorkloadName -ElevatedAction {
+            gsudo pwsh.exe -NoProfile -Command $disableCmd 2>&1 | Out-Null
+        }
         & $LaunchBlock
     } finally {
-        gsudo pwsh.exe -NoProfile -Command $restoreCmd 2>&1 | Out-Null
+        Invoke-WithElevationAttribution -Reason $restoreReason -WorkloadName $WorkloadName -ElevatedAction {
+            gsudo pwsh.exe -NoProfile -Command $restoreCmd 2>&1 | Out-Null
+        }
     }
 }
 
@@ -611,7 +796,9 @@ function Start-InterceptedApplication {
     param(
         [Parameter(Mandatory = $true)]
         [string]$TargetExe,
-        [string[]]$TargetArgs = @()
+        [string[]]$TargetArgs = @(),
+        [Parameter(Mandatory = $false)]
+        [string]$WorkloadName = ""
     )
 
     $sanitizedArgs = @()
@@ -623,13 +810,13 @@ function Start-InterceptedApplication {
     }
 
     if ($sanitizedArgs.Count -eq 0) {
-        Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -LaunchBlock {
+        Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -WorkloadName $WorkloadName -LaunchBlock {
             Start-Process -FilePath $TargetExe | Out-Null
         }
         return
     }
 
-    Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -LaunchBlock {
+    Invoke-WithManagedIfeoTemporarilyDisabled -TargetExe $TargetExe -WorkloadName $WorkloadName -LaunchBlock {
         $quotedArgs = @()
         foreach ($arg in @($sanitizedArgs)) {
             $argText = [string]$arg
@@ -662,6 +849,8 @@ function Invoke-Interceptor {
     }
 
     $workspaces = Get-InterceptorWorkspaces
+    Set-InterceptorElevationAttributionEnabled -Enabled (Get-InterceptorElevationAttributionEnabled -Workspaces $workspaces)
+
     $resolved = Resolve-InterceptedWorkload -Workspaces $workspaces -TargetExe $TargetExe
     if ($null -eq $resolved) {
         Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
@@ -669,7 +858,7 @@ function Invoke-Interceptor {
     }
 
     if (Test-InterceptorRuleActive -RequiredServices $resolved.RequiredServices -RequiredExecutables $resolved.RequiredExecutables) {
-        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs -WorkloadName $resolved.Name
         return
     }
 
@@ -708,7 +897,7 @@ function Invoke-Interceptor {
 
     $nowActive = Invoke-InterceptorReadinessPoll -RequiredServices $activationServices -RequiredExecutables $activationExecutables -WorkloadName $resolved.Name
     if ($nowActive) {
-        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+        Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs -WorkloadName $resolved.Name
         return
     }
 
@@ -718,7 +907,7 @@ function Invoke-Interceptor {
 
     # If activation hasn't fully materialized by timeout, still launch.
     # Launch path handles recursion safety by temporarily disabling managed IFEO.
-    Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs
+    Start-InterceptedApplication -TargetExe $TargetExe -TargetArgs $TargetArgs -WorkloadName $resolved.Name
 }
 
 if ($MyInvocation.InvocationName -ne ".") {

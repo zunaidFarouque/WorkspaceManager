@@ -64,6 +64,7 @@ Detailed ordering, parameters, and the `__SYNC_ONLY__` interceptor-only sync tri
     "notifications": true,
     "enable_interceptors": true,
     "interceptor_poll_max_seconds": 15,
+    "elevation_attribution": true,
     "shortcut_prefix_start": "!Start-",
     "shortcut_prefix_stop": "!Stop-"
   },

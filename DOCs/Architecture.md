@@ -34,7 +34,9 @@ Optional metadata keys at the root or inside objects (`comment`, `description`) 
 
 The UI uses **Active** / **Inactive** / **Mixed** for workloads and modes, and **ON** / **OFF** / **ANY** for hardware targets inside the active system mode. “Mixed” means measured state does not match the declared workload or mode.
 
-Colors and symbols in the TUI follow the implementation in `Dashboard.Impl.ps1` (for example compliance ✓ vs violation vs queued override).
+Workloads also accept a transient **Restart** desired state (Tab 1 `R`); hardware compliance rows accept a transient **RESTART** queue value (Tab 3 `R`). Both expand into a stop-then-start pair within the same 7-phase commit (see §4) — no orchestrator changes are required because the planner just emits the same target on both the stop side and the start side. Restart is a Dashboard-only intent and is never persisted to `workspaces.json`.
+
+Colors and symbols in the TUI follow the implementation in `Dashboard.Impl.ps1` (for example compliance ✓ vs violation vs queued override; `Restart` renders Cyan, `[QUEUED: RESTART]` renders Yellow).
 
 ## 4. Orchestration model (high level)
 

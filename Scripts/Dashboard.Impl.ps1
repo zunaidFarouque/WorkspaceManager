@@ -80,6 +80,7 @@ function Write-StateText {
             "Inactive" { "Green" }
             "Active" { "Red" }
             "Mixed" { "Yellow" }
+            "Restart" { "Cyan" }
             default { "Gray" }
         }
     }
@@ -259,6 +260,28 @@ function Toggle-DashboardQueueOverride {
     $PendingHardwareChanges[$Component] = $next
 }
 
+function Set-DashboardQueueOverrideRestart {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Component,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PendingHardwareChanges
+    )
+
+    $PendingHardwareChanges[$Component] = "RESTART"
+}
+
+function Set-DashboardWorkloadDesiredRestart {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$WorkloadRow
+    )
+
+    $WorkloadRow.DesiredState = "Restart"
+}
+
 function Clear-DashboardQueueOverride {
     [CmdletBinding()]
     param(
@@ -312,7 +335,7 @@ function Get-DashboardFooterText {
     )
 
     $commitAction = if ($CommitMode -eq "Return") { "Return" } else { "Exit" }
-    $commitRow = "[R] CommitMode | [Enter] Commit & $commitAction | [Esc] Cancel"
+    $commitRow = "[C] CommitMode | [Enter] Commit & $commitAction | [Esc] Cancel"
 
     if ($CurrentTab -eq 1) {
         $domainText = "All"
@@ -333,7 +356,7 @@ function Get-DashboardFooterText {
             [string]$script:WorkloadFilterState.Query, `
             $domainText, `
             $favoriteText
-        return "$filterText`n[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle`n$commitRow"
+        return "$filterText`n[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle | [R] Queue Restart`n$commitRow"
     }
     if ($CurrentTab -eq 2) {
         return "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Set Mode | [A] Queue Ideal States`n$commitRow"
@@ -343,7 +366,7 @@ function Get-DashboardFooterText {
         $tab4CommitLine = Get-DashboardTab4CommitLine -SelectedRow $Tab4SelectedRow -CommitMode $CommitMode
         return "$tab4ControlLine`n$tab4CommitLine"
     }
-    return "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle Override | [Bksp] Clear Queue`n$commitRow"
+    return "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle Override | [R] Queue Restart | [Bksp] Clear Queue`n$commitRow"
 }
 
 function Get-DashboardTab4ControlLine {
@@ -382,11 +405,11 @@ function Get-DashboardTab4CommitLine {
     )
 
     if ($null -ne $SelectedRow -and (Test-DashboardTab4RowIsAction -Row $SelectedRow)) {
-        return "[R] CommitMode | [Enter] Confirm/Run Action | [Esc] Cancel"
+        return "[C] CommitMode | [Enter] Confirm/Run Action | [Esc] Cancel"
     }
 
     $commitAction = if ($CommitMode -eq "Return") { "Return" } else { "Exit" }
-    return "[R] CommitMode | [Enter] Commit & $commitAction | [Esc] Cancel"
+    return "[C] CommitMode | [Enter] Commit & $commitAction | [Esc] Cancel"
 }
 
 function Get-DashboardCommitModeDefault {
@@ -765,26 +788,64 @@ function Get-DashboardPendingCommitStates {
     )
 
     $pendingStates = @()
-    $pendingStates += @(
-        $WorkloadStates |
-            Where-Object { $_.DesiredState -ne $_.CurrentState } |
-            ForEach-Object {
-                [pscustomobject]@{
-                    Name         = [string]$_.Name
-                    CurrentState = [string]$_.CurrentState
-                    DesiredState = [string]$_.DesiredState
-                    ProfileType  = [string]$_.ProfileType
-                    Action       = if ([string]$_.DesiredState -eq "Active") { "Start" } else { "Stop" }
-                }
+    foreach ($wl in @($WorkloadStates)) {
+        if ([string]$wl.DesiredState -eq [string]$wl.CurrentState) { continue }
+        $name = [string]$wl.Name
+        $current = [string]$wl.CurrentState
+        $desired = [string]$wl.DesiredState
+        $profile = [string]$wl.ProfileType
+        # Restart expands into a Stop and a Start pending entry so commit messaging and
+        # planner consumers can dedupe by (Name, ProfileType, Action) without losing either side.
+        if ($desired -eq "Restart") {
+            $pendingStates += [pscustomobject]@{
+                Name         = $name
+                CurrentState = $current
+                DesiredState = $desired
+                ProfileType  = $profile
+                Action       = "Stop"
             }
-    )
+            $pendingStates += [pscustomobject]@{
+                Name         = $name
+                CurrentState = $current
+                DesiredState = $desired
+                ProfileType  = $profile
+                Action       = "Start"
+            }
+            continue
+        }
+        $pendingStates += [pscustomobject]@{
+            Name         = $name
+            CurrentState = $current
+            DesiredState = $desired
+            ProfileType  = $profile
+            Action       = if ($desired -eq "Active") { "Start" } else { "Stop" }
+        }
+    }
     foreach ($component in @($PendingHardwareChanges.Keys)) {
+        $value = [string]$PendingHardwareChanges[$component]
+        if ($value -eq "RESTART") {
+            $pendingStates += [pscustomobject]@{
+                Name         = [string]$component
+                CurrentState = ""
+                DesiredState = $value
+                ProfileType  = "Hardware_Override"
+                Action       = "Stop"
+            }
+            $pendingStates += [pscustomobject]@{
+                Name         = [string]$component
+                CurrentState = ""
+                DesiredState = $value
+                ProfileType  = "Hardware_Override"
+                Action       = "Start"
+            }
+            continue
+        }
         $pendingStates += [pscustomobject]@{
             Name         = [string]$component
             CurrentState = ""
-            DesiredState = [string]$PendingHardwareChanges[$component]
+            DesiredState = $value
             ProfileType  = "Hardware_Override"
-            Action       = if ([string]$PendingHardwareChanges[$component] -eq "ON") { "Start" } else { "Stop" }
+            Action       = if ($value -eq "ON") { "Start" } else { "Stop" }
         }
     }
     return @($pendingStates)
@@ -957,7 +1018,9 @@ function Resolve-DashboardEffectiveHardwareTargets {
         }
     }
 
-    $activeWorkloads = @($WorkloadStates | Where-Object { [string]$_.DesiredState -eq "Active" })
+    # Restart desire participates in the start-path hardware merge: the workload ends Active, so
+    # its hardware_targets must be honored just like a normal Active transition.
+    $activeWorkloads = @($WorkloadStates | Where-Object { [string]$_.DesiredState -eq "Active" -or [string]$_.DesiredState -eq "Restart" })
     if ($null -ne $ApplyWorkloadHardwareForNames) {
         $nameSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($n in @($ApplyWorkloadHardwareForNames)) {
@@ -1010,10 +1073,16 @@ function Build-DashboardCommitOperations {
     $hasModeStateDelta = @($ModeStates | Where-Object { [string]$_.CurrentState -ne [string]$_.DesiredState }).Count -gt 0
     $workloadsToStop = @($WorkloadStates | Where-Object { [string]$_.DesiredState -eq "Inactive" -and [string]$_.CurrentState -ne "Inactive" } | Sort-Object -Property Name)
     $workloadsToStart = @($WorkloadStates | Where-Object { [string]$_.DesiredState -eq "Active" -and [string]$_.CurrentState -ne "Active" } | Sort-Object -Property Name)
-    $workloadStartNames = @($workloadsToStart | ForEach-Object { [string]$_.Name })
+    # Restart desire expands into the same target appearing on both the stop side (phases 1-2) and
+    # the start side (phases 6-7) of the same commit. We keep these in dedicated lists so the
+    # `Reason` label can be "Restart <name>" instead of inheriting the Start/Stop label.
+    $workloadsToRestart = @($WorkloadStates | Where-Object { [string]$_.DesiredState -eq "Restart" } | Sort-Object -Property Name)
+    $workloadStartNames = @(@($workloadsToStart | ForEach-Object { [string]$_.Name }) + @($workloadsToRestart | ForEach-Object { [string]$_.Name }))
 
     # Hardware ops come only from explicit Tab 2 **A** / Tab 3 queue entries plus workload `hardware_targets`
-    # for workloads transitioning to Active — never the full mode map by itself (avoids churn on partial queues).
+    # for workloads transitioning to Active or being restarted — never the full mode map by itself
+    # (avoids churn on partial queues). Queue values are ON / OFF / RESTART; RESTART expands into
+    # both a phase 3 Stop and a phase 5 Start op for the same component.
     $hardwareReasonMap = @{}
     $effectiveHardware = Resolve-DashboardEffectiveHardwareTargets -Workspaces $Workspaces -ModeStates $ModeStates -WorkloadStates $WorkloadStates -PendingHardwareChanges $PendingHardwareChanges -WarningsRef $WarningsRef -IncludeSystemModeHardware:$false -ApplyWorkloadHardwareForNames $workloadStartNames -ReasonMap $hardwareReasonMap
 
@@ -1022,22 +1091,38 @@ function Build-DashboardCommitOperations {
             $ops.Add([pscustomobject]@{ Phase = 1; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ExecutablesOnly"; Reason = ("Stop {0}" -f [string]$wl.Name) })
         }
     }
+    foreach ($wl in $workloadsToRestart) {
+        if (Test-DashboardAppWorkloadHasActionableExecutables -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
+            $ops.Add([pscustomobject]@{ Phase = 1; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ExecutablesOnly"; Reason = ("Restart {0}" -f [string]$wl.Name) })
+        }
+    }
     foreach ($wl in $workloadsToStop) {
         if (Test-DashboardAppWorkloadHasActionableServices -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
             $ops.Add([pscustomobject]@{ Phase = 2; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ServicesOnly"; Reason = ("Stop {0}" -f [string]$wl.Name) })
         }
     }
+    foreach ($wl in $workloadsToRestart) {
+        if (Test-DashboardAppWorkloadHasActionableServices -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
+            $ops.Add([pscustomobject]@{ Phase = 2; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Stop"; ExecutionScope = "ServicesOnly"; Reason = ("Restart {0}" -f [string]$wl.Name) })
+        }
+    }
     foreach ($component in @($effectiveHardware.Keys | Sort-Object)) {
-        if ([string]$effectiveHardware[$component] -eq "OFF") {
+        $value = [string]$effectiveHardware[$component]
+        if ($value -eq "OFF") {
             $ops.Add([pscustomobject]@{ Phase = 3; WorkspaceName = [string]$component; ProfileType = "Hardware_Override"; Action = "Stop"; ExecutionScope = "All"; Reason = [string]$hardwareReasonMap[[string]$component] })
+        } elseif ($value -eq "RESTART") {
+            $ops.Add([pscustomobject]@{ Phase = 3; WorkspaceName = [string]$component; ProfileType = "Hardware_Override"; Action = "Stop"; ExecutionScope = "All"; Reason = ("Restart {0}" -f [string]$component) })
         }
     }
     if ($hasModeStateDelta -and -not [string]::IsNullOrWhiteSpace($desiredModeName)) {
         $ops.Add([pscustomobject]@{ Phase = 4; WorkspaceName = $desiredModeName; ProfileType = "System_Mode"; Action = "Start"; ExecutionScope = "PowerPlanOnly"; Reason = ("Apply mode {0}" -f $desiredModeName) })
     }
     foreach ($component in @($effectiveHardware.Keys | Sort-Object)) {
-        if ([string]$effectiveHardware[$component] -eq "ON") {
+        $value = [string]$effectiveHardware[$component]
+        if ($value -eq "ON") {
             $ops.Add([pscustomobject]@{ Phase = 5; WorkspaceName = [string]$component; ProfileType = "Hardware_Override"; Action = "Start"; ExecutionScope = "All"; Reason = [string]$hardwareReasonMap[[string]$component] })
+        } elseif ($value -eq "RESTART") {
+            $ops.Add([pscustomobject]@{ Phase = 5; WorkspaceName = [string]$component; ProfileType = "Hardware_Override"; Action = "Start"; ExecutionScope = "All"; Reason = ("Restart {0}" -f $component) })
         }
     }
     foreach ($wl in $workloadsToStart) {
@@ -1045,9 +1130,19 @@ function Build-DashboardCommitOperations {
             $ops.Add([pscustomobject]@{ Phase = 6; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Start"; ExecutionScope = "ServicesOnly"; Reason = ("Start {0}" -f [string]$wl.Name) })
         }
     }
+    foreach ($wl in $workloadsToRestart) {
+        if (Test-DashboardAppWorkloadHasActionableServices -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
+            $ops.Add([pscustomobject]@{ Phase = 6; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Start"; ExecutionScope = "ServicesOnly"; Reason = ("Restart {0}" -f [string]$wl.Name) })
+        }
+    }
     foreach ($wl in $workloadsToStart) {
         if (Test-DashboardAppWorkloadHasActionableExecutables -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
             $ops.Add([pscustomobject]@{ Phase = 7; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Start"; ExecutionScope = "ExecutablesOnly"; Reason = ("Start {0}" -f [string]$wl.Name) })
+        }
+    }
+    foreach ($wl in $workloadsToRestart) {
+        if (Test-DashboardAppWorkloadHasActionableExecutables -Workspaces $Workspaces -WorkloadName ([string]$wl.Name)) {
+            $ops.Add([pscustomobject]@{ Phase = 7; WorkspaceName = [string]$wl.Name; ProfileType = "App_Workload"; Action = "Start"; ExecutionScope = "ExecutablesOnly"; Reason = ("Restart {0}" -f [string]$wl.Name) })
         }
     }
 
@@ -3870,6 +3965,19 @@ function Start-Dashboard {
                     }
                 }
                 "R" {
+                    if ($CurrentTab -eq 1) {
+                        $active = Get-ActiveStateArray -CurrentTab $CurrentTab -WorkloadStates $script:WorkloadStates -ModeStates $script:ModeStates -SettingsStates $script:SettingsStates -ActionStates $script:ActionStates
+                        if (@($active).Count -gt 0) {
+                            $selected = $active[$cursorIndex]
+                            Set-DashboardWorkloadDesiredRestart -WorkloadRow $selected
+                        }
+                    } elseif ($CurrentTab -eq 3 -and @($script:ComplianceData).Count -gt 0) {
+                        $selected = $script:ComplianceData[$cursorIndex]
+                        Set-DashboardQueueOverrideRestart -Component ([string]$selected.Component) -PendingHardwareChanges $script:PendingHardwareChanges
+                        Normalize-DashboardComplianceRows -ComplianceRows $script:ComplianceData -PendingHardwareChanges $script:PendingHardwareChanges
+                    }
+                }
+                "C" {
                     $commitMode = Toggle-DashboardCommitMode -CurrentMode $commitMode
                 }
                 "Escape" {

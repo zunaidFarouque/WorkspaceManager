@@ -333,27 +333,27 @@ Describe "Dashboard Tab 2/3 Queue Workflow" {
         $tab1Lines = @($tab1Footer -split "`n")
         $tab1Lines.Count | Should -Be 3
         $tab1Lines[0] | Should -Be "[``]Details: None | [M]ixed=Off | [/]Filters: q='' | [G]roup='All' | [F]avourites=Off"
-        $tab1Lines[1] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle"
-        $tab1Lines[2] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $tab1Lines[1] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle | [R] Queue Restart"
+        $tab1Lines[2] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $tab2Footer = Get-DashboardFooterText -CurrentTab 2
         $tab2Lines = @($tab2Footer -split "`n")
         $tab2Lines.Count | Should -Be 2
         $tab2Lines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Set Mode | [A] Queue Ideal States"
         $tab2Lines[0] | Should -Not -Match "Set Blueprint"
-        $tab2Lines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $tab2Lines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $tab3Footer = Get-DashboardFooterText -CurrentTab 3
         $tab3Lines = @($tab3Footer -split "`n")
         $tab3Lines.Count | Should -Be 2
-        $tab3Lines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle Override | [Bksp] Clear Queue"
-        $tab3Lines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $tab3Lines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Toggle Override | [R] Queue Restart | [Bksp] Clear Queue"
+        $tab3Lines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $tab4Footer = Get-DashboardFooterText -CurrentTab 4
         $tab4Lines = @($tab4Footer -split "`n")
         $tab4Lines.Count | Should -Be 2
         $tab4Lines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Edit Setting | [Right] Edit | [Left or +/-] Poll Seconds"
-        $tab4Lines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $tab4Lines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
     }
 
     It "renders tab 4 footer as context-aware by selected row" {
@@ -367,32 +367,32 @@ Describe "Dashboard Tab 2/3 Queue Workflow" {
         $boolLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $boolRow -CommitMode "Exit") -split "`n")
         $boolLines.Count | Should -Be 2
         $boolLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Edit Setting"
-        $boolLines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $boolLines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $choiceLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $choiceRow -CommitMode "Return") -split "`n")
         $choiceLines.Count | Should -Be 2
         $choiceLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Edit Setting"
-        $choiceLines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Return | [Esc] Cancel"
+        $choiceLines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Return | [Esc] Cancel"
 
         $stringLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $stringRow -CommitMode "Exit") -split "`n")
         $stringLines.Count | Should -Be 2
         $stringLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Edit Setting | [Right] Edit"
-        $stringLines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $stringLines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $intLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $intRow -CommitMode "Exit") -split "`n")
         $intLines.Count | Should -Be 2
         $intLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav | [Space] Edit Setting | [Left/Right or +/-] Poll Seconds"
-        $intLines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $intLines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $sectionLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $sectionRow -CommitMode "Exit") -split "`n")
         $sectionLines.Count | Should -Be 2
         $sectionLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav"
-        $sectionLines[1] | Should -Be "[R] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
+        $sectionLines[1] | Should -Be "[C] CommitMode | [Enter] Commit & Exit | [Esc] Cancel"
 
         $actionLines = @((Get-DashboardFooterText -CurrentTab 4 -Tab4SelectedRow $actionRow -CommitMode "Return") -split "`n")
         $actionLines.Count | Should -Be 2
         $actionLines[0] | Should -Be "[1][2][3][4] Tab | [Up/Down] Nav"
-        $actionLines[1] | Should -Be "[R] CommitMode | [Enter] Confirm/Run Action | [Esc] Cancel"
+        $actionLines[1] | Should -Be "[C] CommitMode | [Enter] Confirm/Run Action | [Esc] Cancel"
     }
 
     It "sets active blueprint immediately and updates mode rows" {
@@ -1445,8 +1445,8 @@ Describe "Dashboard Commit Return Mode" {
 
     It "includes commit mode text in tab footer output" {
         Get-DashboardFooterText -CurrentTab 1 -WorkloadDetailMode "None" -CommitMode "Return" | Should -Match 'Commit & Return'
-        Get-DashboardFooterText -CurrentTab 1 -WorkloadDetailMode "None" -CommitMode "Return" | Should -Match '\[R\] CommitMode'
-        Get-DashboardFooterText -CurrentTab 4 -CommitMode "Exit" | Should -Match '\[R\] CommitMode \| \[Enter\] Commit & Exit \| \[Esc\] Cancel'
+        Get-DashboardFooterText -CurrentTab 1 -WorkloadDetailMode "None" -CommitMode "Return" | Should -Match '\[C\] CommitMode'
+        Get-DashboardFooterText -CurrentTab 4 -CommitMode "Exit" | Should -Match '\[C\] CommitMode \| \[Enter\] Commit & Exit \| \[Esc\] Cancel'
     }
 
     It "returns Exit immediately when commit mode is Exit" {
@@ -1505,7 +1505,90 @@ Describe "Dashboard Commit Return Mode" {
     }
 }
 
+Describe "Dashboard Queued RESTART Mode" {
+    BeforeAll {
+        $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+        $script:repoRoot = Split-Path -Path $basePath -Parent
+        $script:scriptsDir = Join-Path -Path $script:repoRoot -ChildPath "Scripts"
+        . (Join-Path -Path $script:scriptsDir -ChildPath "Dashboard.ps1")
+    }
 
+    It "queues RESTART for a hardware component idempotently" {
+        $queue = @{}
+        Set-DashboardQueueOverrideRestart -Component "Bluetooth_Radio" -PendingHardwareChanges $queue
+        $queue["Bluetooth_Radio"] | Should -Be "RESTART"
+        Set-DashboardQueueOverrideRestart -Component "Bluetooth_Radio" -PendingHardwareChanges $queue
+        $queue["Bluetooth_Radio"] | Should -Be "RESTART"
+    }
+
+    It "overwrites an existing ON or OFF queue entry with RESTART" {
+        $queue = @{ "Bluetooth_Radio" = "ON" }
+        Set-DashboardQueueOverrideRestart -Component "Bluetooth_Radio" -PendingHardwareChanges $queue
+        $queue["Bluetooth_Radio"] | Should -Be "RESTART"
+    }
+
+    It "renders [QUEUED: RESTART] in yellow for queued restart rows" {
+        $row = [pscustomobject]@{
+            Component     = "Bluetooth_Radio"
+            PhysicalState = "ON"
+            DesiredState  = "ON"
+            TargetState   = "ON"
+            IsCompliant   = $true
+        }
+        $queue = @{ "Bluetooth_Radio" = "RESTART" }
+
+        $presentation = Get-DashboardTab3RowPresentation -Row $row -IsSelected $true -PendingHardwareChanges $queue
+        $presentation.Status | Should -Be "[QUEUED: RESTART]"
+        $presentation.Color | Should -Be "Yellow"
+        $presentation.Prefix | Should -Be " > "
+    }
+
+    It "sets workload DesiredState to Restart" {
+        $workloadRow = [pscustomobject]@{ Name = "DAW_Cubase"; CurrentState = "Active"; DesiredState = "Active" }
+        Set-DashboardWorkloadDesiredRestart -WorkloadRow $workloadRow
+        $workloadRow.DesiredState | Should -Be "Restart"
+    }
+
+    It "renders Restart desired state in cyan without throwing" {
+        { Write-StateText -State "Restart" } | Should -Not -Throw
+    }
+
+    It "emits Stop+Start pending entries for a RESTART hardware queue value" {
+        $workloadStates = @(
+            [pscustomobject]@{ Name = "noop"; CurrentState = "Active"; DesiredState = "Active"; ProfileType = "App_Workload" }
+        )
+        $queue = @{ "Bluetooth_Radio" = "RESTART" }
+
+        $pending = @(Get-DashboardPendingCommitStates -WorkloadStates $workloadStates -PendingHardwareChanges $queue)
+
+        @($pending | Where-Object { $_.Name -eq "Bluetooth_Radio" -and $_.Action -eq "Stop" -and $_.ProfileType -eq "Hardware_Override" }).Count | Should -Be 1
+        @($pending | Where-Object { $_.Name -eq "Bluetooth_Radio" -and $_.Action -eq "Start" -and $_.ProfileType -eq "Hardware_Override" }).Count | Should -Be 1
+    }
+
+    It "emits Stop+Start pending entries for a workload with DesiredState Restart" {
+        $workloadStates = @(
+            [pscustomobject]@{ Name = "DAW_Cubase"; CurrentState = "Active"; DesiredState = "Restart"; ProfileType = "App_Workload" }
+        )
+        $queue = @{}
+
+        $pending = @(Get-DashboardPendingCommitStates -WorkloadStates $workloadStates -PendingHardwareChanges $queue)
+
+        @($pending | Where-Object { $_.Name -eq "DAW_Cubase" -and $_.Action -eq "Stop" -and $_.ProfileType -eq "App_Workload" }).Count | Should -Be 1
+        @($pending | Where-Object { $_.Name -eq "DAW_Cubase" -and $_.Action -eq "Start" -and $_.ProfileType -eq "App_Workload" }).Count | Should -Be 1
+    }
+
+    It "Add-DashboardIdealHardwareToQueue never queues RESTART (compliance violations only)" {
+        $queue = @{}
+        $complianceData = @(
+            [pscustomobject]@{ Component = "Windows_Update"; IsCompliant = $false; TargetState = "OFF" },
+            [pscustomobject]@{ Component = "Bluetooth_Radio"; IsCompliant = $false; TargetState = "ON" }
+        )
+
+        Add-DashboardIdealHardwareToQueue -ComplianceData $complianceData -PendingHardwareChanges $queue
+
+        @($queue.Values | Where-Object { $_ -eq "RESTART" }).Count | Should -Be 0
+    }
+}
 
 
 

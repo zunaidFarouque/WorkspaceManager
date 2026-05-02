@@ -126,8 +126,10 @@ Dashboard commits build a global operation plan and execute in this fixed order 
 **User-intent gating (Dashboard planner):**
 
 - Phase **4** runs only when a **system mode row** has `CurrentState ≠ DesiredState` (blueprint change), applying `power_plan` for the **desired** active mode.
-- Phases **3** and **5** run only for hardware keys from **explicit** `PendingHardwareChanges` (Tab 2 **A** or Tab 3) and/or **workload `hardware_targets`** for workloads **starting** (transition to Active). The planner does **not** implicitly expand the full desired mode’s `hardware_targets` JSON on commit (that would reintroduce churn when only one device is queued). Tab 1 workload toggles **do not** pull in mode hardware by themselves.
-- When a workload start and the queue both mention a component, **`App_Workloads.hardware_targets` (start path) > queued hardware** for that key.
+- Phases **3** and **5** run only for hardware keys from **explicit** `PendingHardwareChanges` (Tab 2 **A** or Tab 3) and/or **workload `hardware_targets`** for workloads **starting or restarting** (start path). The planner does **not** implicitly expand the full desired mode’s `hardware_targets` JSON on commit (that would reintroduce churn when only one device is queued). Tab 1 workload toggles **do not** pull in mode hardware by themselves.
+- When a workload start and the queue both mention a component, **`App_Workloads.hardware_targets` (start path) > queued hardware** for that key (including `RESTART`).
+- A `PendingHardwareChanges` value of **`RESTART`** is expanded to **both** a phase 3 Stop op and a phase 5 Start op for the same component, so the component is cycled within a single commit. Orchestrator itself still only receives discrete `Start` / `Stop` calls per `Hardware_Override`.
+- A workload row with **`DesiredState = "Restart"`** is scheduled on **both** the stop side (phases 1, 2) and the start side (phases 6, 7) within the same commit. Its `hardware_targets` are merged once on the start side, exactly like an Active transition.
 
 Dashboard renders this operation plan with intent section headers (for example `STOPPING SERVICES`, `STARTING EXECUTABLES`) and concrete bullets in `- Reason: task` form before execution. As operations run, the display is updated so in-flight rows show `->` and completed rows show `OK`; if redraw APIs are unavailable, Dashboard falls back to append-mode updates. Internal phase numbers remain the ordering mechanism but are not shown in the user-facing commit log.
 
